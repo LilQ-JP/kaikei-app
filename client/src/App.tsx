@@ -4,32 +4,65 @@ import NotFound from "@/pages/NotFound";
 import { Route, Switch } from "wouter";
 import ErrorBoundary from "./components/ErrorBoundary";
 import { ThemeProvider } from "./contexts/ThemeContext";
-import Home from "./pages/Home";
-
+import AppLayout from "./components/AppLayout";
+import { useEffect, useState } from "react";
+import { initializeDB } from "./lib/db";
+import Dashboard from "./pages/Dashboard";
+import JournalForm from "./pages/JournalForm";
+import JournalList from "./pages/JournalList";
+import Invoices from "./pages/Invoices";
+import Ledger from "./pages/Ledger";
+import TrialBalance from "./pages/TrialBalance";
+import ProfitLoss from "./pages/ProfitLoss";
+import BalanceSheet from "./pages/BalanceSheet";
+import TaxFiling from "./pages/TaxFiling";
+import Receipts from "./pages/Receipts";
+import Accounts from "./pages/Accounts";
+import DataManagement from "./pages/DataManagement";
+import Profile from "./pages/Profile";
 
 function Router() {
   return (
-    <Switch>
-      <Route path={"/"} component={Home} />
-      <Route path={"/404"} component={NotFound} />
-      {/* Final fallback route */}
-      <Route component={NotFound} />
-    </Switch>
+    <AppLayout>
+      <Switch>
+        <Route path="/" component={Dashboard} />
+        <Route path="/journals/new" component={JournalForm} />
+        <Route path="/journals" component={JournalList} />
+        <Route path="/invoices" component={Invoices} />
+        <Route path="/ledger" component={Ledger} />
+        <Route path="/trial-balance" component={TrialBalance} />
+        <Route path="/pl" component={ProfitLoss} />
+        <Route path="/bs" component={BalanceSheet} />
+        <Route path="/tax-filing" component={TaxFiling} />
+        <Route path="/receipts" component={Receipts} />
+        <Route path="/accounts" component={Accounts} />
+        <Route path="/data" component={DataManagement} />
+        <Route path="/profile" component={Profile} />
+        <Route path="/404" component={NotFound} />
+        <Route component={NotFound} />
+      </Switch>
+    </AppLayout>
   );
 }
 
-// NOTE: About Theme
-// - First choose a default theme according to your design style (dark or light bg), than change color palette in index.css
-//   to keep consistent foreground/background color across components
-// - If you want to make theme switchable, pass `switchable` ThemeProvider and use `useTheme` hook
-
 function App() {
+  const [ready, setReady] = useState(false);
+
+  useEffect(() => {
+    initializeDB().then(() => setReady(true));
+  }, []);
+
+  if (!ready) {
+    return (
+      <div className="flex h-screen items-center justify-center bg-background">
+        <div className="text-sm font-semibold text-muted-foreground">読み込み中...</div>
+      </div>
+    );
+  }
+
   return (
     <ErrorBoundary>
-      <ThemeProvider
-        defaultTheme="light"
-        // switchable
-      >
+      <ThemeProvider defaultTheme="light">
         <TooltipProvider>
           <Toaster />
           <Router />
