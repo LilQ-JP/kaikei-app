@@ -20,6 +20,7 @@ import Receipts from "./pages/Receipts";
 import Accounts from "./pages/Accounts";
 import DataManagement from "./pages/DataManagement";
 import Profile from "./pages/Profile";
+import Seed from "./pages/Seed";
 
 function Router() {
   return (
@@ -38,6 +39,7 @@ function Router() {
         <Route path="/accounts" component={Accounts} />
         <Route path="/data" component={DataManagement} />
         <Route path="/profile" component={Profile} />
+        <Route path="/seed" component={Seed} />
         <Route path="/404" component={NotFound} />
         <Route component={NotFound} />
       </Switch>

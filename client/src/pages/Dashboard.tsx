@@ -50,10 +50,29 @@ export default function Dashboard() {
     return map;
   }, [accounts]);
 
-  const currentYear = new Date().getFullYear();
+  // Detect available years from data, default to latest year with data or current year
+  const availableYears = useMemo(() => {
+    const years = new Set<number>();
+    journals.forEach((j) => {
+      const y = parseInt(j.date.split("-")[0]);
+      if (!isNaN(y)) years.add(y);
+    });
+    if (years.size === 0) years.add(new Date().getFullYear());
+    return Array.from(years).sort((a, b) => b - a);
+  }, [journals]);
+
+  const [selectedYear, setSelectedYear] = useState<number | null>(null);
+
+  useEffect(() => {
+    if (!loading && availableYears.length > 0 && selectedYear === null) {
+      setSelectedYear(availableYears[0]);
+    }
+  }, [availableYears, selectedYear, loading]);
+
+  const displayYear = selectedYear ?? availableYears[0] ?? new Date().getFullYear();
   const currentYearJournals = useMemo(
-    () => journals.filter((j) => j.date.startsWith(String(currentYear))),
-    [journals, currentYear]
+    () => journals.filter((j) => j.date.startsWith(String(displayYear))),
+    [journals, displayYear]
   );
 
   // Calculate totals
@@ -127,7 +146,20 @@ export default function Dashboard() {
       {/* Header */}
       <div className="flex items-center justify-between">
         <div>
-          <h1 className="text-xl font-bold">{currentYear}年度</h1>
+          <div className="flex items-center gap-2">
+            <h1 className="text-xl font-bold">{displayYear}年度</h1>
+            {availableYears.length > 1 && (
+              <select
+                value={displayYear}
+                onChange={(e) => setSelectedYear(Number(e.target.value))}
+                className="text-[13px] font-semibold border border-border rounded-md px-2 py-1 bg-background"
+              >
+                {availableYears.map((y) => (
+                  <option key={y} value={y}>{y}年度</option>
+                ))}
+              </select>
+            )}
+          </div>
           <p className="text-[13px] text-muted-foreground mt-0.5">{today} 現在</p>
         </div>
         <Link href="/journals/new">
