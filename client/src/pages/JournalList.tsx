@@ -1,11 +1,19 @@
 /**
- * JournalList — 仕訳帳ページ
+ * JournalList — 仕訳帳ページ（レシート連携対応）
  * macOS Ledger Design
+ *
+ * レシートが紐付いた仕訳にはアイコンが表示され、
+ * クリックでレシート画像をプレビューできる。
  */
 
 import { Button } from "@/components/ui/button";
-import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import { Card, CardContent } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
+import {
+  Dialog,
+  DialogContent,
+  DialogTitle,
+} from "@/components/ui/dialog";
 import {
   AlertDialog,
   AlertDialogAction,
@@ -18,15 +26,22 @@ import {
   AlertDialogTrigger,
 } from "@/components/ui/alert-dialog";
 import {
+  Tooltip,
+  TooltipContent,
+  TooltipTrigger,
+} from "@/components/ui/tooltip";
+import {
   getAllAccounts,
   getAllJournals,
   deleteJournal,
+  getReceipt,
   type AccountItem,
   type JournalEntry,
+  type Receipt,
 } from "@/lib/db";
 import { formatYen, journalsToCSV, downloadFile } from "@/lib/utils";
-import { Download, Plus, Search, Trash2 } from "lucide-react";
-import { useEffect, useMemo, useState } from "react";
+import { Download, Plus, Search, Trash2, Camera } from "lucide-react";
+import { useEffect, useMemo, useState, useCallback } from "react";
 import { Link } from "wouter";
 import { toast } from "sonner";
 
@@ -35,15 +50,32 @@ export default function JournalList() {
   const [accounts, setAccounts] = useState<AccountItem[]>([]);
   const [search, setSearch] = useState("");
   const [loading, setLoading] = useState(true);
+  const [receiptCache, setReceiptCache] = useState<Record<string, Receipt>>({});
+  const [previewReceipt, setPreviewReceipt] = useState<Receipt | null>(null);
 
-  async function load() {
+  const load = useCallback(async () => {
     const [j, a] = await Promise.all([getAllJournals(), getAllAccounts()]);
     setJournals(j);
     setAccounts(a);
     setLoading(false);
-  }
 
-  useEffect(() => { load(); }, []);
+    // レシート付き仕訳のレシートデータをプリロード
+    const withReceipts = j.filter((entry) => entry.receiptId);
+    const receipts: Record<string, Receipt> = {};
+    await Promise.all(
+      withReceipts.map(async (entry) => {
+        if (entry.receiptId) {
+          const r = await getReceipt(entry.receiptId);
+          if (r) receipts[entry.receiptId] = r;
+        }
+      })
+    );
+    setReceiptCache(receipts);
+  }, []);
+
+  useEffect(() => {
+    load();
+  }, [load]);
 
   const accountMap = useMemo(() => {
     const map = new Map<string, AccountItem>();
@@ -71,6 +103,15 @@ export default function JournalList() {
     await deleteJournal(id);
     toast.success("仕訳を削除しました");
     load();
+  }
+
+  function handleShowReceipt(receiptId: string) {
+    const receipt = receiptCache[receiptId];
+    if (receipt) {
+      setPreviewReceipt(receipt);
+    } else {
+      toast.error("レシート画像が見つかりません");
+    }
   }
 
   function handleExportCSV() {
@@ -141,6 +182,9 @@ export default function JournalList() {
                     <th className="px-4 py-2.5 text-left font-bold text-muted-foreground">貸方</th>
                     <th className="px-4 py-2.5 text-right font-bold text-muted-foreground">金額</th>
                     <th className="px-4 py-2.5 text-left font-bold text-muted-foreground">摘要</th>
+                    <th className="px-4 py-2.5 w-10 text-center font-bold text-muted-foreground">
+                      <Camera className="h-3.5 w-3.5 mx-auto" />
+                    </th>
                     <th className="px-4 py-2.5 w-10"></th>
                   </tr>
                 </thead>
@@ -148,6 +192,7 @@ export default function JournalList() {
                   {filtered.map((j) => {
                     const debit = accountMap.get(j.debitAccountId);
                     const credit = accountMap.get(j.creditAccountId);
+                    const hasReceipt = !!j.receiptId;
                     return (
                       <tr key={j.id} className="hover:bg-muted/20 transition-colors">
                         <td className="px-4 py-2.5 font-mono text-muted-foreground whitespace-nowrap">
@@ -164,6 +209,27 @@ export default function JournalList() {
                         </td>
                         <td className="px-4 py-2.5 text-muted-foreground truncate max-w-[200px]">
                           {j.description || "—"}
+                        </td>
+                        <td className="px-2 py-2.5 text-center">
+                          {hasReceipt ? (
+                            <Tooltip>
+                              <TooltipTrigger asChild>
+                                <Button
+                                  variant="ghost"
+                                  size="sm"
+                                  className="h-7 w-7 p-0 text-green-600 hover:text-green-700 hover:bg-green-50"
+                                  onClick={() => handleShowReceipt(j.receiptId!)}
+                                >
+                                  <Camera className="h-3.5 w-3.5" />
+                                </Button>
+                              </TooltipTrigger>
+                              <TooltipContent>
+                                <p className="text-[12px]">レシートを表示</p>
+                              </TooltipContent>
+                            </Tooltip>
+                          ) : (
+                            <span className="text-muted-foreground/30">—</span>
+                          )}
                         </td>
                         <td className="px-2 py-2.5">
                           <AlertDialog>
@@ -201,6 +267,33 @@ export default function JournalList() {
       <div className="mt-3 text-[12px] text-muted-foreground">
         {filtered.length}件の仕訳 / 合計: {formatYen(filtered.reduce((sum, j) => sum + j.amount, 0))}
       </div>
+
+      {/* Receipt preview dialog */}
+      <Dialog open={!!previewReceipt} onOpenChange={() => setPreviewReceipt(null)}>
+        <DialogContent className="max-w-lg">
+          <DialogTitle className="text-[14px] font-bold">
+            レシート画像
+          </DialogTitle>
+          {previewReceipt && (
+            <div className="space-y-3">
+              <img
+                src={previewReceipt.imageData}
+                alt="レシート"
+                className="w-full h-auto rounded-lg border"
+              />
+              <div className="flex items-center justify-between text-[12px] text-muted-foreground">
+                <span>{previewReceipt.fileName}</span>
+                <span>{previewReceipt.date}</span>
+              </div>
+              {previewReceipt.vendor && (
+                <div className="text-[12px]">
+                  <span className="font-semibold">取引先:</span> {previewReceipt.vendor}
+                </div>
+              )}
+            </div>
+          )}
+        </DialogContent>
+      </Dialog>
     </div>
   );
 }

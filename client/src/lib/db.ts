@@ -371,6 +371,17 @@ export async function getAllReceipts(): Promise<Receipt[]> {
   return all.sort((a, b) => b.date.localeCompare(a.date));
 }
 
+export async function getReceipt(id: string): Promise<Receipt | undefined> {
+  const db = await getDB();
+  return db.get("receipts", id);
+}
+
+export async function getReceiptByJournalId(journalId: string): Promise<Receipt | undefined> {
+  const db = await getDB();
+  const all = await db.getAllFromIndex("receipts", "by-journal", journalId);
+  return all[0];
+}
+
 export async function putReceipt(receipt: Receipt): Promise<void> {
   const db = await getDB();
   await db.put("receipts", receipt);

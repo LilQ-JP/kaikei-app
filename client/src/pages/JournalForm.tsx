@@ -1,9 +1,9 @@
 /**
- * JournalForm — 仕訳入力ページ（AI自動仕訳機能付き）
+ * JournalForm — 仕訳入力ページ（AI自動仕訳 + レシート添付）
  * macOS Ledger Design
  *
- * 摘要を入力するとAIが自動的に勘定科目を推定。
- * 過去の仕訳パターン学習 + キーワードルールベースのハイブリッド方式。
+ * - 摘要を入力するとAIが勘定科目を自動推定
+ * - レシート画像を添付して仕訳と紐付け保存
  */
 
 import { Button } from "@/components/ui/button";
@@ -23,15 +23,22 @@ import {
   TooltipTrigger,
 } from "@/components/ui/tooltip";
 import {
+  Dialog,
+  DialogContent,
+  DialogTitle,
+} from "@/components/ui/dialog";
+import {
   getAllAccounts,
   getAllJournals,
   putJournal,
+  putReceipt,
   type AccountItem,
   type JournalEntry,
+  type Receipt,
 } from "@/lib/db";
 import { suggestJournalAccounts, getConfidenceLabel, type AISuggestion } from "@/lib/ai-journal";
 import { CATEGORY_LABELS, getToday } from "@/lib/utils";
-import { Save, Plus, Trash2, Sparkles, Check, X } from "lucide-react";
+import { Save, Plus, Trash2, Sparkles, Check, X, Camera, Image as ImageIcon } from "lucide-react";
 import { useEffect, useState, useMemo, useCallback, useRef } from "react";
 import { useLocation } from "wouter";
 import { toast } from "sonner";
@@ -44,6 +51,8 @@ interface FormEntry {
   amount: string;
   description: string;
   memo: string;
+  receiptFile?: File;
+  receiptPreview?: string;
 }
 
 function createEmptyEntry(): FormEntry {
@@ -58,6 +67,15 @@ function createEmptyEntry(): FormEntry {
   };
 }
 
+function fileToBase64(file: File): Promise<string> {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => resolve(reader.result as string);
+    reader.onerror = reject;
+    reader.readAsDataURL(file);
+  });
+}
+
 export default function JournalForm() {
   const [, navigate] = useLocation();
   const [accounts, setAccounts] = useState<AccountItem[]>([]);
@@ -66,7 +84,9 @@ export default function JournalForm() {
   const [saving, setSaving] = useState(false);
   const [suggestions, setSuggestions] = useState<Record<string, AISuggestion | null>>({});
   const [aiEnabled, setAiEnabled] = useState(true);
+  const [previewImage, setPreviewImage] = useState<string | null>(null);
   const debounceTimers = useRef<Record<string, ReturnType<typeof setTimeout>>>({});
+  const fileInputRefs = useRef<Record<string, HTMLInputElement | null>>({});
 
   useEffect(() => {
     Promise.all([getAllAccounts(), getAllJournals()]).then(([accs, journals]) => {
@@ -93,8 +113,6 @@ export default function JournalForm() {
         setSuggestions((prev) => ({ ...prev, [entryKey]: null }));
         return;
       }
-
-      // Debounce: 300ms
       if (debounceTimers.current[entryKey]) {
         clearTimeout(debounceTimers.current[entryKey]);
       }
@@ -111,7 +129,6 @@ export default function JournalForm() {
       prev.map((e, i) => {
         if (i !== index) return e;
         const updated = { ...e, [field]: value };
-        // 摘要が変更されたらAI推定を実行
         if (field === "description") {
           runAISuggestion(e.key, value);
         }
@@ -120,10 +137,37 @@ export default function JournalForm() {
     );
   }
 
+  function handleReceiptSelect(entryKey: string, file: File) {
+    if (!file.type.startsWith("image/")) {
+      toast.error("画像ファイルを選択してください");
+      return;
+    }
+    if (file.size > 10 * 1024 * 1024) {
+      toast.error("ファイルサイズは10MB以下にしてください");
+      return;
+    }
+    const previewUrl = URL.createObjectURL(file);
+    setEntries((prev) =>
+      prev.map((e) =>
+        e.key === entryKey ? { ...e, receiptFile: file, receiptPreview: previewUrl } : e
+      )
+    );
+    toast.success("レシート画像を添付しました");
+  }
+
+  function removeReceipt(entryKey: string) {
+    setEntries((prev) =>
+      prev.map((e) => {
+        if (e.key !== entryKey) return e;
+        if (e.receiptPreview) URL.revokeObjectURL(e.receiptPreview);
+        return { ...e, receiptFile: undefined, receiptPreview: undefined };
+      })
+    );
+  }
+
   function applySuggestion(entryKey: string) {
     const suggestion = suggestions[entryKey];
     if (!suggestion) return;
-
     setEntries((prev) =>
       prev.map((e) => {
         if (e.key !== entryKey) return e;
@@ -134,7 +178,6 @@ export default function JournalForm() {
         };
       })
     );
-    // 適用後にサジェストをクリア
     setSuggestions((prev) => ({ ...prev, [entryKey]: null }));
     toast.success("AIの提案を適用しました");
   }
@@ -154,6 +197,7 @@ export default function JournalForm() {
   function removeEntry(index: number) {
     if (entries.length <= 1) return;
     const removed = entries[index];
+    if (removed.receiptPreview) URL.revokeObjectURL(removed.receiptPreview);
     setSuggestions((prev) => {
       const next = { ...prev };
       delete next[removed.key];
@@ -183,14 +227,36 @@ export default function JournalForm() {
     try {
       const now = new Date().toISOString();
       for (const e of entries) {
+        const journalId = crypto.randomUUID();
+        let receiptId: string | undefined;
+
+        // レシート画像がある場合は先にReceiptを保存
+        if (e.receiptFile) {
+          const base64 = await fileToBase64(e.receiptFile);
+          receiptId = crypto.randomUUID();
+          const receipt: Receipt = {
+            id: receiptId,
+            imageData: base64,
+            fileName: e.receiptFile.name,
+            date: e.date,
+            amount: Number(e.amount) || undefined,
+            vendor: e.description || undefined,
+            description: e.description,
+            journalEntryId: journalId,
+            createdAt: now,
+          };
+          await putReceipt(receipt);
+        }
+
         const journal: JournalEntry = {
-          id: crypto.randomUUID(),
+          id: journalId,
           date: e.date,
           debitAccountId: e.debitAccountId,
           creditAccountId: e.creditAccountId,
           amount: Number(e.amount),
           description: e.description,
           memo: e.memo,
+          receiptId,
           createdAt: now,
           updatedAt: now,
         };
@@ -210,7 +276,6 @@ export default function JournalForm() {
       <div className="flex items-center justify-between mb-6">
         <div className="flex items-center gap-3">
           <h1 className="text-xl font-bold">仕訳入力</h1>
-          {/* AI toggle */}
           <Tooltip>
             <TooltipTrigger asChild>
               <Button
@@ -255,16 +320,24 @@ export default function JournalForm() {
                 <CardTitle className="text-[13px] font-bold text-muted-foreground">
                   仕訳 #{index + 1}
                 </CardTitle>
-                {entries.length > 1 && (
-                  <Button
-                    variant="ghost"
-                    size="sm"
-                    className="h-7 w-7 p-0 text-muted-foreground hover:text-destructive"
-                    onClick={() => removeEntry(index)}
-                  >
-                    <Trash2 className="h-3.5 w-3.5" />
-                  </Button>
-                )}
+                <div className="flex items-center gap-1">
+                  {entry.receiptPreview && (
+                    <span className="text-[10px] text-green-600 font-semibold mr-1">
+                      <Camera className="inline h-3 w-3 mr-0.5" />
+                      レシート添付済
+                    </span>
+                  )}
+                  {entries.length > 1 && (
+                    <Button
+                      variant="ghost"
+                      size="sm"
+                      className="h-7 w-7 p-0 text-muted-foreground hover:text-destructive"
+                      onClick={() => removeEntry(index)}
+                    >
+                      <Trash2 className="h-3.5 w-3.5" />
+                    </Button>
+                  )}
+                </div>
               </CardHeader>
               <CardContent className="space-y-4">
                 {/* Description first — AI triggers on this */}
@@ -420,6 +493,72 @@ export default function JournalForm() {
                     className="mt-1 text-[13px]"
                   />
                 </div>
+
+                {/* Receipt attachment */}
+                <div>
+                  <Label className="text-[12px] font-semibold">
+                    <Camera className="inline h-3 w-3 mr-1 -mt-0.5" />
+                    レシート画像（任意）
+                  </Label>
+                  <div className="mt-1">
+                    {entry.receiptPreview ? (
+                      <div className="flex items-start gap-3">
+                        <button
+                          type="button"
+                          onClick={() => setPreviewImage(entry.receiptPreview!)}
+                          className="relative group rounded-lg overflow-hidden border border-border shrink-0"
+                        >
+                          <img
+                            src={entry.receiptPreview}
+                            alt="レシート"
+                            className="h-20 w-20 object-cover"
+                          />
+                          <div className="absolute inset-0 bg-black/0 group-hover:bg-black/30 transition-colors flex items-center justify-center">
+                            <ImageIcon className="h-5 w-5 text-white opacity-0 group-hover:opacity-100 transition-opacity" />
+                          </div>
+                        </button>
+                        <div className="flex flex-col gap-1">
+                          <span className="text-[12px] text-muted-foreground truncate max-w-[200px]">
+                            {entry.receiptFile?.name}
+                          </span>
+                          <Button
+                            variant="ghost"
+                            size="sm"
+                            className="h-6 text-[11px] text-destructive hover:text-destructive w-fit px-2"
+                            onClick={() => removeReceipt(entry.key)}
+                          >
+                            <Trash2 className="h-3 w-3 mr-1" />
+                            削除
+                          </Button>
+                        </div>
+                      </div>
+                    ) : (
+                      <div>
+                        <input
+                          ref={(el) => { fileInputRefs.current[entry.key] = el; }}
+                          type="file"
+                          accept="image/*"
+                          capture="environment"
+                          className="hidden"
+                          onChange={(e) => {
+                            const file = e.target.files?.[0];
+                            if (file) handleReceiptSelect(entry.key, file);
+                            e.target.value = "";
+                          }}
+                        />
+                        <Button
+                          variant="outline"
+                          size="sm"
+                          className="h-8 text-[12px] text-muted-foreground"
+                          onClick={() => fileInputRefs.current[entry.key]?.click()}
+                        >
+                          <Camera className="h-3.5 w-3.5 mr-1.5" />
+                          レシートを撮影・選択
+                        </Button>
+                      </div>
+                    )}
+                  </div>
+                </div>
               </CardContent>
             </Card>
           );
@@ -436,6 +575,20 @@ export default function JournalForm() {
           {saving ? "保存中..." : `${entries.length}件を保存`}
         </Button>
       </div>
+
+      {/* Receipt image preview dialog */}
+      <Dialog open={!!previewImage} onOpenChange={() => setPreviewImage(null)}>
+        <DialogContent className="max-w-lg p-2">
+          <DialogTitle className="sr-only">レシート画像プレビュー</DialogTitle>
+          {previewImage && (
+            <img
+              src={previewImage}
+              alt="レシートプレビュー"
+              className="w-full h-auto rounded-lg"
+            />
+          )}
+        </DialogContent>
+      </Dialog>
     </div>
   );
 }

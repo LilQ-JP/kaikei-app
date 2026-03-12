@@ -1,6 +1,9 @@
 /**
- * Receipts — レシート画像保存・管理ページ
+ * Receipts — レシート画像保存・管理ページ（仕訳連携対応）
  * macOS Ledger Design
+ *
+ * 仕訳と紐付いたレシートにはバッジが表示され、
+ * クリックで紐付いた仕訳の詳細を確認できる。
  */
 
 import { Button } from "@/components/ui/button";
@@ -26,21 +29,33 @@ import {
   AlertDialogTrigger,
 } from "@/components/ui/alert-dialog";
 import {
+  Tooltip,
+  TooltipContent,
+  TooltipTrigger,
+} from "@/components/ui/tooltip";
+import {
   getAllReceipts,
+  getAllJournals,
+  getAllAccounts,
   putReceipt,
   deleteReceipt,
   type Receipt,
+  type JournalEntry,
+  type AccountItem,
 } from "@/lib/db";
 import { formatYen, getToday } from "@/lib/utils";
-import { Camera, ImageIcon, Plus, Trash2, X, ZoomIn } from "lucide-react";
-import { useEffect, useState, useCallback, useRef } from "react";
+import { Camera, ImageIcon, Plus, Trash2, X, ZoomIn, BookOpen, Link2 } from "lucide-react";
+import { useEffect, useState, useCallback, useRef, useMemo } from "react";
 import { toast } from "sonner";
 
 export default function Receipts() {
   const [receipts, setReceipts] = useState<Receipt[]>([]);
+  const [journals, setJournals] = useState<JournalEntry[]>([]);
+  const [accounts, setAccounts] = useState<AccountItem[]>([]);
   const [loading, setLoading] = useState(true);
   const [dialogOpen, setDialogOpen] = useState(false);
   const [previewImage, setPreviewImage] = useState<string | null>(null);
+  const [journalDetailReceipt, setJournalDetailReceipt] = useState<Receipt | null>(null);
 
   // Form state
   const [imageData, setImageData] = useState("");
@@ -52,12 +67,45 @@ export default function Receipts() {
   const fileInputRef = useRef<HTMLInputElement>(null);
 
   const load = useCallback(async () => {
-    const r = await getAllReceipts();
+    const [r, j, a] = await Promise.all([getAllReceipts(), getAllJournals(), getAllAccounts()]);
     setReceipts(r);
+    setJournals(j);
+    setAccounts(a);
     setLoading(false);
   }, []);
 
   useEffect(() => { load(); }, [load]);
+
+  const accountMap = useMemo(() => {
+    const map = new Map<string, AccountItem>();
+    accounts.forEach((a) => map.set(a.id, a));
+    return map;
+  }, [accounts]);
+
+  // レシートIDから紐付いた仕訳を引く
+  const journalByReceiptId = useMemo(() => {
+    const map = new Map<string, JournalEntry>();
+    journals.forEach((j) => {
+      if (j.receiptId) map.set(j.receiptId, j);
+    });
+    return map;
+  }, [journals]);
+
+  // journalEntryIdから紐付いた仕訳を引く（レシート側にjournalEntryIdがある場合）
+  const journalById = useMemo(() => {
+    const map = new Map<string, JournalEntry>();
+    journals.forEach((j) => map.set(j.id, j));
+    return map;
+  }, [journals]);
+
+  function getLinkedJournal(receipt: Receipt): JournalEntry | undefined {
+    // 仕訳側のreceiptIdでマッチ
+    const byReceiptId = journalByReceiptId.get(receipt.id);
+    if (byReceiptId) return byReceiptId;
+    // レシート側のjournalEntryIdでマッチ
+    if (receipt.journalEntryId) return journalById.get(receipt.journalEntryId);
+    return undefined;
+  }
 
   function handleFileChange(e: React.ChangeEvent<HTMLInputElement>) {
     const file = e.target.files?.[0];
@@ -66,11 +114,10 @@ export default function Receipts() {
       toast.error("画像ファイルを選択してください");
       return;
     }
-    if (file.size > 5 * 1024 * 1024) {
-      toast.error("ファイルサイズは5MB以下にしてください");
+    if (file.size > 10 * 1024 * 1024) {
+      toast.error("ファイルサイズは10MB以下にしてください");
       return;
     }
-
     setFileName(file.name);
     const reader = new FileReader();
     reader.onload = (ev) => {
@@ -84,7 +131,6 @@ export default function Receipts() {
       toast.error("画像を選択してください");
       return;
     }
-
     const receipt: Receipt = {
       id: crypto.randomUUID(),
       imageData,
@@ -95,7 +141,6 @@ export default function Receipts() {
       description: description || undefined,
       createdAt: new Date().toISOString(),
     };
-
     await putReceipt(receipt);
     toast.success("レシートを保存しました");
     setDialogOpen(false);
@@ -139,7 +184,6 @@ export default function Receipts() {
               <DialogTitle>レシートを追加</DialogTitle>
             </DialogHeader>
             <div className="space-y-4 mt-2">
-              {/* Image upload */}
               <div>
                 <Label className="text-[12px] font-semibold">画像 *</Label>
                 {imageData ? (
@@ -161,7 +205,7 @@ export default function Receipts() {
                   >
                     <Camera className="h-8 w-8 text-muted-foreground/50 mb-2" />
                     <p className="text-[12px] text-muted-foreground">クリックして画像を選択</p>
-                    <p className="text-[11px] text-muted-foreground/60">JPG, PNG (5MB以下)</p>
+                    <p className="text-[11px] text-muted-foreground/60">JPG, PNG (10MB以下)</p>
                   </div>
                 )}
                 <input
@@ -208,60 +252,75 @@ export default function Receipts() {
           <CardContent className="flex flex-col items-center justify-center py-16">
             <ImageIcon className="h-12 w-12 text-muted-foreground/30 mb-3" />
             <p className="text-[13px] text-muted-foreground">レシートがありません</p>
-            <p className="text-[12px] text-muted-foreground/60 mt-1">レシートの画像を保存して経費管理に活用できます</p>
+            <p className="text-[12px] text-muted-foreground/60 mt-1">仕訳入力時にレシートを添付するか、ここから直接追加できます</p>
           </CardContent>
         </Card>
       ) : (
         <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-4">
-          {receipts.map((receipt) => (
-            <Card key={receipt.id} className="border shadow-sm overflow-hidden group">
-              <div className="relative h-40 bg-muted/20">
-                <img
-                  src={receipt.imageData}
-                  alt={receipt.fileName}
-                  className="w-full h-full object-contain cursor-pointer"
-                  onClick={() => setPreviewImage(receipt.imageData)}
-                />
-                <div className="absolute inset-0 bg-black/0 group-hover:bg-black/10 transition-colors flex items-center justify-center opacity-0 group-hover:opacity-100">
-                  <Button
-                    variant="ghost"
-                    size="sm"
-                    className="bg-white/80 h-8 w-8 p-0"
+          {receipts.map((receipt) => {
+            const linkedJournal = getLinkedJournal(receipt);
+            return (
+              <Card key={receipt.id} className="border shadow-sm overflow-hidden group">
+                <div className="relative h-40 bg-muted/20">
+                  <img
+                    src={receipt.imageData}
+                    alt={receipt.fileName}
+                    className="w-full h-full object-contain cursor-pointer"
                     onClick={() => setPreviewImage(receipt.imageData)}
-                  >
-                    <ZoomIn className="h-4 w-4" />
-                  </Button>
-                </div>
-              </div>
-              <CardContent className="p-3">
-                <div className="flex items-start justify-between">
-                  <div className="min-w-0">
-                    <div className="text-[12px] font-mono text-muted-foreground">{receipt.date}</div>
-                    {receipt.vendor && <div className="text-[13px] font-semibold truncate">{receipt.vendor}</div>}
-                    {receipt.amount && <div className="text-[13px] font-mono font-bold">{formatYen(receipt.amount)}</div>}
-                    {receipt.description && <div className="text-[11px] text-muted-foreground truncate mt-0.5">{receipt.description}</div>}
+                  />
+                  {/* 仕訳連携バッジ */}
+                  {linkedJournal && (
+                    <Tooltip>
+                      <TooltipTrigger asChild>
+                        <button
+                          className="absolute top-2 left-2 flex items-center gap-1 bg-primary text-primary-foreground rounded-full px-2 py-0.5 text-[10px] font-bold shadow-sm hover:bg-primary/90 transition-colors"
+                          onClick={() => setJournalDetailReceipt(receipt)}
+                        >
+                          <Link2 className="h-3 w-3" />
+                          仕訳連携済
+                        </button>
+                      </TooltipTrigger>
+                      <TooltipContent>
+                        <p className="text-[12px]">クリックで紐付いた仕訳を確認</p>
+                      </TooltipContent>
+                    </Tooltip>
+                  )}
+                  <div className="absolute inset-0 bg-black/0 group-hover:bg-black/10 transition-colors flex items-center justify-center opacity-0 group-hover:opacity-100 pointer-events-none">
+                    <div className="bg-white/80 h-8 w-8 rounded-full flex items-center justify-center">
+                      <ZoomIn className="h-4 w-4" />
+                    </div>
                   </div>
-                  <AlertDialog>
-                    <AlertDialogTrigger asChild>
-                      <Button variant="ghost" size="sm" className="h-7 w-7 p-0 shrink-0 text-muted-foreground hover:text-destructive">
-                        <Trash2 className="h-3.5 w-3.5" />
-                      </Button>
-                    </AlertDialogTrigger>
-                    <AlertDialogContent>
-                      <AlertDialogHeader>
-                        <AlertDialogTitle>レシートを削除</AlertDialogTitle>
-                        <AlertDialogDescription>このレシートを削除しますか？</AlertDialogDescription>
-                      </AlertDialogHeader>
-                      <AlertDialogFooter>
-                        <AlertDialogCancel>キャンセル</AlertDialogCancel>
-                        <AlertDialogAction onClick={() => handleDelete(receipt.id)}>削除</AlertDialogAction>
-                      </AlertDialogFooter>
-                    </AlertDialogContent>
-                  </AlertDialog>
                 </div>
-              </CardContent>
-            </Card>
-          ))}
+                <CardContent className="p-3">
+                  <div className="flex items-start justify-between">
+                    <div className="min-w-0">
+                      <div className="text-[12px] font-mono text-muted-foreground">{receipt.date}</div>
+                      {receipt.vendor && <div className="text-[13px] font-semibold truncate">{receipt.vendor}</div>}
+                      {receipt.amount && <div className="text-[13px] font-mono font-bold">{formatYen(receipt.amount)}</div>}
+                      {receipt.description && <div className="text-[11px] text-muted-foreground truncate mt-0.5">{receipt.description}</div>}
+                    </div>
+                    <AlertDialog>
+                      <AlertDialogTrigger asChild>
+                        <Button variant="ghost" size="sm" className="h-7 w-7 p-0 shrink-0 text-muted-foreground hover:text-destructive">
+                          <Trash2 className="h-3.5 w-3.5" />
+                        </Button>
+                      </AlertDialogTrigger>
+                      <AlertDialogContent>
+                        <AlertDialogHeader>
+                          <AlertDialogTitle>レシートを削除</AlertDialogTitle>
+                          <AlertDialogDescription>このレシートを削除しますか？</AlertDialogDescription>
+                        </AlertDialogHeader>
+                        <AlertDialogFooter>
+                          <AlertDialogCancel>キャンセル</AlertDialogCancel>
+                          <AlertDialogAction onClick={() => handleDelete(receipt.id)}>削除</AlertDialogAction>
+                        </AlertDialogFooter>
+                      </AlertDialogContent>
+                    </AlertDialog>
+                  </div>
+                </CardContent>
+              </Card>
+            );
+          })}
         </div>
       )}
 
@@ -285,8 +344,65 @@ export default function Receipts() {
         </div>
       )}
 
+      {/* Journal detail dialog for linked receipt */}
+      <Dialog open={!!journalDetailReceipt} onOpenChange={() => setJournalDetailReceipt(null)}>
+        <DialogContent className="max-w-md">
+          <DialogTitle className="text-[14px] font-bold flex items-center gap-2">
+            <BookOpen className="h-4 w-4" />
+            紐付いた仕訳
+          </DialogTitle>
+          {journalDetailReceipt && (() => {
+            const journal = getLinkedJournal(journalDetailReceipt);
+            if (!journal) return <p className="text-[13px] text-muted-foreground">仕訳が見つかりません</p>;
+            const debit = accountMap.get(journal.debitAccountId);
+            const credit = accountMap.get(journal.creditAccountId);
+            return (
+              <div className="space-y-3 mt-2">
+                <div className="grid grid-cols-2 gap-3">
+                  <div className="bg-muted/30 rounded-lg p-3">
+                    <div className="text-[11px] text-muted-foreground font-semibold mb-1">日付</div>
+                    <div className="text-[13px] font-mono">{journal.date}</div>
+                  </div>
+                  <div className="bg-muted/30 rounded-lg p-3">
+                    <div className="text-[11px] text-muted-foreground font-semibold mb-1">金額</div>
+                    <div className="text-[13px] font-mono font-bold">{formatYen(journal.amount)}</div>
+                  </div>
+                </div>
+                <div className="grid grid-cols-2 gap-3">
+                  <div className="bg-muted/30 rounded-lg p-3">
+                    <div className="text-[11px] text-muted-foreground font-semibold mb-1">借方</div>
+                    <div className="text-[13px] font-semibold">{debit?.name || "—"}</div>
+                  </div>
+                  <div className="bg-muted/30 rounded-lg p-3">
+                    <div className="text-[11px] text-muted-foreground font-semibold mb-1">貸方</div>
+                    <div className="text-[13px] font-semibold">{credit?.name || "—"}</div>
+                  </div>
+                </div>
+                {journal.description && (
+                  <div className="bg-muted/30 rounded-lg p-3">
+                    <div className="text-[11px] text-muted-foreground font-semibold mb-1">摘要</div>
+                    <div className="text-[13px]">{journal.description}</div>
+                  </div>
+                )}
+                {journal.memo && (
+                  <div className="bg-muted/30 rounded-lg p-3">
+                    <div className="text-[11px] text-muted-foreground font-semibold mb-1">メモ</div>
+                    <div className="text-[13px]">{journal.memo}</div>
+                  </div>
+                )}
+              </div>
+            );
+          })()}
+        </DialogContent>
+      </Dialog>
+
       <div className="mt-3 text-[12px] text-muted-foreground">
         {receipts.length}件のレシート
+        {receipts.filter((r) => getLinkedJournal(r)).length > 0 && (
+          <span className="ml-2">
+            （うち{receipts.filter((r) => getLinkedJournal(r)).length}件が仕訳と連携済）
+          </span>
+        )}
       </div>
     </div>
   );
