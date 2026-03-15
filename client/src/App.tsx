@@ -21,6 +21,11 @@ import Accounts from "./pages/Accounts";
 import DataManagement from "./pages/DataManagement";
 import Profile from "./pages/Profile";
 import Seed from "./pages/Seed";
+import CsvImport from "./pages/CsvImport";
+import HomeExpense from "./pages/HomeExpense";
+import FixedAssets from "./pages/FixedAssets";
+import ConsumptionTax from "./pages/ConsumptionTax";
+import MonthlyTrend from "./pages/MonthlyTrend";
 
 function Router() {
   return (
@@ -28,13 +33,19 @@ function Router() {
       <Switch>
         <Route path="/" component={Dashboard} />
         <Route path="/journals/new" component={JournalForm} />
+        <Route path="/journals/edit/:id" component={JournalForm} />
         <Route path="/journals" component={JournalList} />
+        <Route path="/csv-import" component={CsvImport} />
         <Route path="/invoices" component={Invoices} />
         <Route path="/ledger" component={Ledger} />
         <Route path="/trial-balance" component={TrialBalance} />
+        <Route path="/monthly-trend" component={MonthlyTrend} />
         <Route path="/pl" component={ProfitLoss} />
         <Route path="/bs" component={BalanceSheet} />
         <Route path="/tax-filing" component={TaxFiling} />
+        <Route path="/consumption-tax" component={ConsumptionTax} />
+        <Route path="/home-expense" component={HomeExpense} />
+        <Route path="/fixed-assets" component={FixedAssets} />
         <Route path="/receipts" component={Receipts} />
         <Route path="/accounts" component={Accounts} />
         <Route path="/data" component={DataManagement} />

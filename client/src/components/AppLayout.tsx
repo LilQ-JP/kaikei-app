@@ -7,6 +7,7 @@ import { cn } from "@/lib/utils";
 import {
   BarChart3,
   BookOpen,
+  Building2,
   Calculator,
   FileText,
   Home,
@@ -17,6 +18,10 @@ import {
   X,
   Download,
   ClipboardList,
+  Upload,
+  Percent,
+  TrendingUp,
+  FileSpreadsheet,
 } from "lucide-react";
 import { useState } from "react";
 import { Link, useLocation } from "wouter";
@@ -31,11 +36,16 @@ interface NavItem {
 const NAV_ITEMS: NavItem[] = [
   { icon: Home, label: "ダッシュボード", href: "/", group: "メイン" },
   { icon: BookOpen, label: "仕訳入力", href: "/journals/new", group: "メイン" },
+  { icon: Upload, label: "CSV取込", href: "/csv-import", group: "メイン" },
   { icon: ClipboardList, label: "仕訳帳", href: "/journals", group: "帳簿" },
   { icon: BarChart3, label: "総勘定元帳", href: "/ledger", group: "帳簿" },
   { icon: Calculator, label: "試算表", href: "/trial-balance", group: "帳簿" },
+  { icon: TrendingUp, label: "月次推移表", href: "/monthly-trend", group: "帳簿" },
   { icon: FileText, label: "損益計算書", href: "/pl", group: "決算" },
   { icon: FileText, label: "貸借対照表", href: "/bs", group: "決算" },
+  { icon: Percent, label: "家事按分", href: "/home-expense", group: "決算" },
+  { icon: Building2, label: "固定資産台帳", href: "/fixed-assets", group: "決算" },
+  { icon: FileSpreadsheet, label: "消費税集計", href: "/consumption-tax", group: "決算" },
   { icon: Receipt, label: "請求書", href: "/invoices", group: "業務" },
   { icon: ImageIcon, label: "レシート", href: "/receipts", group: "業務" },
   { icon: FileText, label: "確定申告", href: "/tax-filing", group: "業務" },
@@ -53,6 +63,12 @@ export default function AppLayout({ children }: { children: React.ReactNode }) {
     acc[item.group].push(item);
     return acc;
   }, {});
+
+  // Find active nav item for header title
+  const activeItem = NAV_ITEMS.find((item) => {
+    if (item.href === "/") return location === "/";
+    return location.startsWith(item.href);
+  });
 
   return (
     <div className="flex h-screen overflow-hidden bg-background">
@@ -98,6 +114,8 @@ export default function AppLayout({ children }: { children: React.ReactNode }) {
                 const isActive =
                   item.href === "/"
                     ? location === "/"
+                    : item.href === "/journals/new"
+                    ? location === "/journals/new" || location.startsWith("/journals/edit")
                     : location.startsWith(item.href);
                 return (
                   <Link key={item.href} href={item.href}>
@@ -139,9 +157,7 @@ export default function AppLayout({ children }: { children: React.ReactNode }) {
             <Menu className="h-5 w-5" />
           </button>
           <div className="text-[13px] font-semibold text-muted-foreground">
-            {NAV_ITEMS.find((item) =>
-              item.href === "/" ? location === "/" : location.startsWith(item.href)
-            )?.label || ""}
+            {activeItem?.label || ""}
           </div>
         </header>
 

@@ -1,9 +1,6 @@
 /**
- * JournalList — 仕訳帳ページ（レシート連携対応）
+ * JournalList — 仕訳帳ページ（レシート連携 + 編集対応）
  * macOS Ledger Design
- *
- * レシートが紐付いた仕訳にはアイコンが表示され、
- * クリックでレシート画像をプレビューできる。
  */
 
 import { Button } from "@/components/ui/button";
@@ -40,7 +37,7 @@ import {
   type Receipt,
 } from "@/lib/db";
 import { formatYen, journalsToCSV, downloadFile } from "@/lib/utils";
-import { Download, Plus, Search, Trash2, Camera } from "lucide-react";
+import { Download, Plus, Search, Trash2, Camera, Pencil } from "lucide-react";
 import { useEffect, useMemo, useState, useCallback } from "react";
 import { Link } from "wouter";
 import { toast } from "sonner";
@@ -59,7 +56,6 @@ export default function JournalList() {
     setAccounts(a);
     setLoading(false);
 
-    // レシート付き仕訳のレシートデータをプリロード
     const withReceipts = j.filter((entry) => entry.receiptId);
     const receipts: Record<string, Receipt> = {};
     await Promise.all(
@@ -153,7 +149,6 @@ export default function JournalList() {
         </div>
       </div>
 
-      {/* Search */}
       <div className="relative mb-4">
         <Search className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
         <Input
@@ -185,6 +180,7 @@ export default function JournalList() {
                     <th className="px-4 py-2.5 w-10 text-center font-bold text-muted-foreground">
                       <Camera className="h-3.5 w-3.5 mx-auto" />
                     </th>
+                    <th className="px-4 py-2.5 w-10"></th>
                     <th className="px-4 py-2.5 w-10"></th>
                   </tr>
                 </thead>
@@ -232,6 +228,13 @@ export default function JournalList() {
                           )}
                         </td>
                         <td className="px-2 py-2.5">
+                          <Link href={`/journals/edit/${j.id}`}>
+                            <Button variant="ghost" size="sm" className="h-7 w-7 p-0 text-muted-foreground hover:text-primary">
+                              <Pencil className="h-3.5 w-3.5" />
+                            </Button>
+                          </Link>
+                        </td>
+                        <td className="px-2 py-2.5">
                           <AlertDialog>
                             <AlertDialogTrigger asChild>
                               <Button variant="ghost" size="sm" className="h-7 w-7 p-0 text-muted-foreground hover:text-destructive">
@@ -268,19 +271,12 @@ export default function JournalList() {
         {filtered.length}件の仕訳 / 合計: {formatYen(filtered.reduce((sum, j) => sum + j.amount, 0))}
       </div>
 
-      {/* Receipt preview dialog */}
       <Dialog open={!!previewReceipt} onOpenChange={() => setPreviewReceipt(null)}>
         <DialogContent className="max-w-lg">
-          <DialogTitle className="text-[14px] font-bold">
-            レシート画像
-          </DialogTitle>
+          <DialogTitle className="text-[14px] font-bold">レシート画像</DialogTitle>
           {previewReceipt && (
             <div className="space-y-3">
-              <img
-                src={previewReceipt.imageData}
-                alt="レシート"
-                className="w-full h-auto rounded-lg border"
-              />
+              <img src={previewReceipt.imageData} alt="レシート" className="w-full h-auto rounded-lg border" />
               <div className="flex items-center justify-between text-[12px] text-muted-foreground">
                 <span>{previewReceipt.fileName}</span>
                 <span>{previewReceipt.date}</span>
