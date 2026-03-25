@@ -1,5 +1,5 @@
 /**
- * JournalList — 仕訳帳ページ（レシート連携 + 編集対応）
+ * JournalList — 仕訳帳ページ（レシート連携 + 編集 + 決済カード表示）
  * macOS Ledger Design
  */
 
@@ -37,10 +37,14 @@ import {
   type Receipt,
 } from "@/lib/db";
 import { formatYen, journalsToCSV, downloadFile } from "@/lib/utils";
-import { Download, Plus, Search, Trash2, Camera, Pencil } from "lucide-react";
+import { Download, Plus, Search, Trash2, Camera, Pencil, CreditCard, FileText } from "lucide-react";
 import { useEffect, useMemo, useState, useCallback } from "react";
 import { Link } from "wouter";
 import { toast } from "sonner";
+
+function isPdfData(data: string): boolean {
+  return data.startsWith("data:application/pdf");
+}
 
 export default function JournalList() {
   const [journals, setJournals] = useState<JournalEntry[]>([]);
@@ -90,7 +94,8 @@ export default function JournalList() {
         j.description.toLowerCase().includes(q) ||
         debit?.name.toLowerCase().includes(q) ||
         credit?.name.toLowerCase().includes(q) ||
-        String(j.amount).includes(q)
+        String(j.amount).includes(q) ||
+        (j.paymentMethod && j.paymentMethod.toLowerCase().includes(q))
       );
     });
   }, [journals, search, accountMap]);
@@ -152,7 +157,7 @@ export default function JournalList() {
       <div className="relative mb-4">
         <Search className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
         <Input
-          placeholder="日付・科目名・摘要で検索..."
+          placeholder="日付・科目名・摘要・カード名で検索..."
           value={search}
           onChange={(e) => setSearch(e.target.value)}
           className="pl-9 text-[13px]"
@@ -177,6 +182,10 @@ export default function JournalList() {
                     <th className="px-4 py-2.5 text-left font-bold text-muted-foreground">貸方</th>
                     <th className="px-4 py-2.5 text-right font-bold text-muted-foreground">金額</th>
                     <th className="px-4 py-2.5 text-left font-bold text-muted-foreground">摘要</th>
+                    <th className="px-4 py-2.5 text-left font-bold text-muted-foreground">
+                      <CreditCard className="h-3.5 w-3.5 inline mr-1" />
+                      カード
+                    </th>
                     <th className="px-4 py-2.5 w-10 text-center font-bold text-muted-foreground">
                       <Camera className="h-3.5 w-3.5 mx-auto" />
                     </th>
@@ -206,6 +215,16 @@ export default function JournalList() {
                         <td className="px-4 py-2.5 text-muted-foreground truncate max-w-[200px]">
                           {j.description || "—"}
                         </td>
+                        <td className="px-4 py-2.5 whitespace-nowrap">
+                          {j.paymentMethod ? (
+                            <span className="inline-flex items-center gap-1 text-[11px] bg-muted/50 dark:bg-muted/30 rounded-full px-2 py-0.5 font-medium">
+                              <CreditCard className="h-3 w-3 text-muted-foreground" />
+                              {j.paymentMethod}
+                            </span>
+                          ) : (
+                            <span className="text-muted-foreground/30">—</span>
+                          )}
+                        </td>
                         <td className="px-2 py-2.5 text-center">
                           {hasReceipt ? (
                             <Tooltip>
@@ -213,7 +232,7 @@ export default function JournalList() {
                                 <Button
                                   variant="ghost"
                                   size="sm"
-                                  className="h-7 w-7 p-0 text-green-600 hover:text-green-700 hover:bg-green-50"
+                                  className="h-7 w-7 p-0 text-green-600 hover:text-green-700 hover:bg-green-50 dark:hover:bg-green-900/30"
                                   onClick={() => handleShowReceipt(j.receiptId!)}
                                 >
                                   <Camera className="h-3.5 w-3.5" />
@@ -271,14 +290,28 @@ export default function JournalList() {
         {filtered.length}件の仕訳 / 合計: {formatYen(filtered.reduce((sum, j) => sum + j.amount, 0))}
       </div>
 
+      {/* Receipt preview dialog — image or PDF */}
       <Dialog open={!!previewReceipt} onOpenChange={() => setPreviewReceipt(null)}>
         <DialogContent className="max-w-lg">
-          <DialogTitle className="text-[14px] font-bold">レシート画像</DialogTitle>
+          <DialogTitle className="text-[14px] font-bold">レシート</DialogTitle>
           {previewReceipt && (
             <div className="space-y-3">
-              <img src={previewReceipt.imageData} alt="レシート" className="w-full h-auto rounded-lg border" />
+              {isPdfData(previewReceipt.imageData) ? (
+                <div className="w-full rounded-lg border overflow-hidden" style={{ height: "60vh" }}>
+                  <iframe
+                    src={previewReceipt.imageData}
+                    title="PDF Preview"
+                    className="w-full h-full"
+                  />
+                </div>
+              ) : (
+                <img src={previewReceipt.imageData} alt="レシート" className="w-full h-auto rounded-lg border" />
+              )}
               <div className="flex items-center justify-between text-[12px] text-muted-foreground">
-                <span>{previewReceipt.fileName}</span>
+                <span className="flex items-center gap-1">
+                  {isPdfData(previewReceipt.imageData) && <FileText className="h-3 w-3 text-red-500" />}
+                  {previewReceipt.fileName}
+                </span>
                 <span>{previewReceipt.date}</span>
               </div>
               {previewReceipt.vendor && (

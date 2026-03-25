@@ -1,9 +1,10 @@
 /**
- * Receipts — レシート画像保存・管理ページ（仕訳連携対応）
+ * Receipts — レシート画像/PDF保存・管理ページ（仕訳連携対応）
  * macOS Ledger Design
  *
- * 仕訳と紐付いたレシートにはバッジが表示され、
- * クリックで紐付いた仕訳の詳細を確認できる。
+ * - 画像（JPG/PNG）とPDFの両方に対応
+ * - 仕訳と紐付いたレシートにはバッジが表示
+ * - クリックで紐付いた仕訳の詳細を確認可能
  */
 
 import { Button } from "@/components/ui/button";
@@ -44,9 +45,13 @@ import {
   type AccountItem,
 } from "@/lib/db";
 import { formatYen, getToday } from "@/lib/utils";
-import { Camera, ImageIcon, Plus, Trash2, X, ZoomIn, BookOpen, Link2 } from "lucide-react";
+import { Camera, ImageIcon, Plus, Trash2, X, ZoomIn, BookOpen, Link2, FileText } from "lucide-react";
 import { useEffect, useState, useCallback, useRef, useMemo } from "react";
 import { toast } from "sonner";
+
+function isPdfData(data: string): boolean {
+  return data.startsWith("data:application/pdf");
+}
 
 export default function Receipts() {
   const [receipts, setReceipts] = useState<Receipt[]>([]);
@@ -54,12 +59,13 @@ export default function Receipts() {
   const [accounts, setAccounts] = useState<AccountItem[]>([]);
   const [loading, setLoading] = useState(true);
   const [dialogOpen, setDialogOpen] = useState(false);
-  const [previewImage, setPreviewImage] = useState<string | null>(null);
+  const [previewData, setPreviewData] = useState<{ data: string; isPdf: boolean } | null>(null);
   const [journalDetailReceipt, setJournalDetailReceipt] = useState<Receipt | null>(null);
 
   // Form state
-  const [imageData, setImageData] = useState("");
+  const [fileData, setFileData] = useState("");
   const [fileName, setFileName] = useState("");
+  const [fileIsPdf, setFileIsPdf] = useState(false);
   const [date, setDate] = useState(getToday());
   const [amount, setAmount] = useState("");
   const [vendor, setVendor] = useState("");
@@ -82,7 +88,6 @@ export default function Receipts() {
     return map;
   }, [accounts]);
 
-  // レシートIDから紐付いた仕訳を引く
   const journalByReceiptId = useMemo(() => {
     const map = new Map<string, JournalEntry>();
     journals.forEach((j) => {
@@ -91,7 +96,6 @@ export default function Receipts() {
     return map;
   }, [journals]);
 
-  // journalEntryIdから紐付いた仕訳を引く（レシート側にjournalEntryIdがある場合）
   const journalById = useMemo(() => {
     const map = new Map<string, JournalEntry>();
     journals.forEach((j) => map.set(j.id, j));
@@ -99,10 +103,8 @@ export default function Receipts() {
   }, [journals]);
 
   function getLinkedJournal(receipt: Receipt): JournalEntry | undefined {
-    // 仕訳側のreceiptIdでマッチ
     const byReceiptId = journalByReceiptId.get(receipt.id);
     if (byReceiptId) return byReceiptId;
-    // レシート側のjournalEntryIdでマッチ
     if (receipt.journalEntryId) return journalById.get(receipt.journalEntryId);
     return undefined;
   }
@@ -110,8 +112,10 @@ export default function Receipts() {
   function handleFileChange(e: React.ChangeEvent<HTMLInputElement>) {
     const file = e.target.files?.[0];
     if (!file) return;
-    if (!file.type.startsWith("image/")) {
-      toast.error("画像ファイルを選択してください");
+    const isImage = file.type.startsWith("image/");
+    const isPdf = file.type === "application/pdf";
+    if (!isImage && !isPdf) {
+      toast.error("画像またはPDFファイルを選択してください");
       return;
     }
     if (file.size > 10 * 1024 * 1024) {
@@ -119,21 +123,22 @@ export default function Receipts() {
       return;
     }
     setFileName(file.name);
+    setFileIsPdf(isPdf);
     const reader = new FileReader();
     reader.onload = (ev) => {
-      setImageData(ev.target?.result as string);
+      setFileData(ev.target?.result as string);
     };
     reader.readAsDataURL(file);
   }
 
   async function handleSave() {
-    if (!imageData) {
-      toast.error("画像を選択してください");
+    if (!fileData) {
+      toast.error("画像またはPDFを選択してください");
       return;
     }
     const receipt: Receipt = {
       id: crypto.randomUUID(),
-      imageData,
+      imageData: fileData,
       fileName,
       date,
       amount: amount ? Number(amount) : undefined,
@@ -149,8 +154,9 @@ export default function Receipts() {
   }
 
   function resetForm() {
-    setImageData("");
+    setFileData("");
     setFileName("");
+    setFileIsPdf(false);
     setDate(getToday());
     setAmount("");
     setVendor("");
@@ -162,6 +168,11 @@ export default function Receipts() {
     await deleteReceipt(id);
     toast.success("レシートを削除しました");
     load();
+  }
+
+  function openPreview(receipt: Receipt) {
+    const isPdf = isPdfData(receipt.imageData);
+    setPreviewData({ data: receipt.imageData, isPdf });
   }
 
   if (loading) {
@@ -185,15 +196,23 @@ export default function Receipts() {
             </DialogHeader>
             <div className="space-y-4 mt-2">
               <div>
-                <Label className="text-[12px] font-semibold">画像 *</Label>
-                {imageData ? (
+                <Label className="text-[12px] font-semibold">画像 / PDF *</Label>
+                {fileData ? (
                   <div className="mt-1 relative">
-                    <img src={imageData} alt="preview" className="w-full h-48 object-contain rounded-lg border bg-muted/20" />
+                    {fileIsPdf ? (
+                      <div className="w-full h-48 flex flex-col items-center justify-center rounded-lg border bg-muted/20">
+                        <FileText className="h-12 w-12 text-red-500 mb-2" />
+                        <p className="text-[13px] font-semibold">{fileName}</p>
+                        <p className="text-[11px] text-muted-foreground">PDFファイル</p>
+                      </div>
+                    ) : (
+                      <img src={fileData} alt="preview" className="w-full h-48 object-contain rounded-lg border bg-muted/20" />
+                    )}
                     <Button
                       variant="ghost"
                       size="sm"
                       className="absolute top-1 right-1 h-7 w-7 p-0 bg-background/80"
-                      onClick={() => { setImageData(""); setFileName(""); if (fileInputRef.current) fileInputRef.current.value = ""; }}
+                      onClick={() => { setFileData(""); setFileName(""); setFileIsPdf(false); if (fileInputRef.current) fileInputRef.current.value = ""; }}
                     >
                       <X className="h-3.5 w-3.5" />
                     </Button>
@@ -204,14 +223,14 @@ export default function Receipts() {
                     onClick={() => fileInputRef.current?.click()}
                   >
                     <Camera className="h-8 w-8 text-muted-foreground/50 mb-2" />
-                    <p className="text-[12px] text-muted-foreground">クリックして画像を選択</p>
-                    <p className="text-[11px] text-muted-foreground/60">JPG, PNG (10MB以下)</p>
+                    <p className="text-[12px] text-muted-foreground">クリックして画像/PDFを選択</p>
+                    <p className="text-[11px] text-muted-foreground/60">JPG, PNG, PDF (10MB以下)</p>
                   </div>
                 )}
                 <input
                   ref={fileInputRef}
                   type="file"
-                  accept="image/*"
+                  accept="image/*,application/pdf"
                   onChange={handleFileChange}
                   className="hidden"
                 />
@@ -253,21 +272,34 @@ export default function Receipts() {
             <ImageIcon className="h-12 w-12 text-muted-foreground/30 mb-3" />
             <p className="text-[13px] text-muted-foreground">レシートがありません</p>
             <p className="text-[12px] text-muted-foreground/60 mt-1">仕訳入力時にレシートを添付するか、ここから直接追加できます</p>
+            <p className="text-[11px] text-muted-foreground/50 mt-0.5">画像（JPG/PNG）とPDFに対応</p>
           </CardContent>
         </Card>
       ) : (
         <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-4">
           {receipts.map((receipt) => {
             const linkedJournal = getLinkedJournal(receipt);
+            const isPdf = isPdfData(receipt.imageData);
             return (
               <Card key={receipt.id} className="border shadow-sm overflow-hidden group">
                 <div className="relative h-40 bg-muted/20">
-                  <img
-                    src={receipt.imageData}
-                    alt={receipt.fileName}
-                    className="w-full h-full object-contain cursor-pointer"
-                    onClick={() => setPreviewImage(receipt.imageData)}
-                  />
+                  {isPdf ? (
+                    <div
+                      className="w-full h-full flex flex-col items-center justify-center cursor-pointer"
+                      onClick={() => openPreview(receipt)}
+                    >
+                      <FileText className="h-12 w-12 text-red-500 mb-1" />
+                      <p className="text-[11px] font-semibold text-muted-foreground truncate max-w-[90%]">{receipt.fileName}</p>
+                      <p className="text-[10px] text-muted-foreground/60">PDF</p>
+                    </div>
+                  ) : (
+                    <img
+                      src={receipt.imageData}
+                      alt={receipt.fileName}
+                      className="w-full h-full object-contain cursor-pointer"
+                      onClick={() => openPreview(receipt)}
+                    />
+                  )}
                   {/* 仕訳連携バッジ */}
                   {linkedJournal && (
                     <Tooltip>
@@ -285,16 +317,23 @@ export default function Receipts() {
                       </TooltipContent>
                     </Tooltip>
                   )}
-                  <div className="absolute inset-0 bg-black/0 group-hover:bg-black/10 transition-colors flex items-center justify-center opacity-0 group-hover:opacity-100 pointer-events-none">
-                    <div className="bg-white/80 h-8 w-8 rounded-full flex items-center justify-center">
-                      <ZoomIn className="h-4 w-4" />
+                  {!isPdf && (
+                    <div className="absolute inset-0 bg-black/0 group-hover:bg-black/10 transition-colors flex items-center justify-center opacity-0 group-hover:opacity-100 pointer-events-none">
+                      <div className="bg-white/80 dark:bg-black/50 h-8 w-8 rounded-full flex items-center justify-center">
+                        <ZoomIn className="h-4 w-4" />
+                      </div>
                     </div>
-                  </div>
+                  )}
                 </div>
                 <CardContent className="p-3">
                   <div className="flex items-start justify-between">
                     <div className="min-w-0">
-                      <div className="text-[12px] font-mono text-muted-foreground">{receipt.date}</div>
+                      <div className="flex items-center gap-1.5">
+                        <div className="text-[12px] font-mono text-muted-foreground">{receipt.date}</div>
+                        {isPdf && (
+                          <span className="text-[9px] font-bold text-red-600 bg-red-50 dark:bg-red-900/30 dark:text-red-400 px-1 py-0.5 rounded">PDF</span>
+                        )}
+                      </div>
                       {receipt.vendor && <div className="text-[13px] font-semibold truncate">{receipt.vendor}</div>}
                       {receipt.amount && <div className="text-[13px] font-mono font-bold">{formatYen(receipt.amount)}</div>}
                       {receipt.description && <div className="text-[11px] text-muted-foreground truncate mt-0.5">{receipt.description}</div>}
@@ -324,19 +363,29 @@ export default function Receipts() {
         </div>
       )}
 
-      {/* Image preview modal */}
-      {previewImage && (
+      {/* Preview modal — image or PDF */}
+      {previewData && (
         <div
           className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 backdrop-blur-sm"
-          onClick={() => setPreviewImage(null)}
+          onClick={() => setPreviewData(null)}
         >
-          <div className="relative max-w-[90vw] max-h-[90vh]">
-            <img src={previewImage} alt="preview" className="max-w-full max-h-[85vh] object-contain rounded-lg" />
+          <div className="relative max-w-[90vw] max-h-[90vh]" onClick={(e) => e.stopPropagation()}>
+            {previewData.isPdf ? (
+              <div className="bg-background rounded-lg overflow-hidden shadow-2xl" style={{ width: "80vw", height: "85vh" }}>
+                <iframe
+                  src={previewData.data}
+                  title="PDF Preview"
+                  className="w-full h-full"
+                />
+              </div>
+            ) : (
+              <img src={previewData.data} alt="preview" className="max-w-full max-h-[85vh] object-contain rounded-lg" />
+            )}
             <Button
               variant="ghost"
               size="sm"
-              className="absolute top-2 right-2 h-8 w-8 p-0 bg-white/80 hover:bg-white"
-              onClick={() => setPreviewImage(null)}
+              className="absolute top-2 right-2 h-8 w-8 p-0 bg-white/80 dark:bg-black/60 hover:bg-white dark:hover:bg-black/80"
+              onClick={() => setPreviewData(null)}
             >
               <X className="h-4 w-4" />
             </Button>
@@ -382,6 +431,12 @@ export default function Receipts() {
                   <div className="bg-muted/30 rounded-lg p-3">
                     <div className="text-[11px] text-muted-foreground font-semibold mb-1">摘要</div>
                     <div className="text-[13px]">{journal.description}</div>
+                  </div>
+                )}
+                {journal.paymentMethod && (
+                  <div className="bg-muted/30 rounded-lg p-3">
+                    <div className="text-[11px] text-muted-foreground font-semibold mb-1">決済手段</div>
+                    <div className="text-[13px]">{journal.paymentMethod}</div>
                   </div>
                 )}
                 {journal.memo && (

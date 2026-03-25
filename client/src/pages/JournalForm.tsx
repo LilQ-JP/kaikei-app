@@ -1,12 +1,13 @@
 /**
- * JournalForm — 仕訳入力・編集ページ（AI自動仕訳 + レシート添付 + 複合仕訳対応）
+ * JournalForm — 仕訳入力・編集ページ（AI自動仕訳 + レシート添付 + 複合仕訳 + 決済カード記録）
  * macOS Ledger Design
  *
  * - 新規作成 /journals/new
  * - 編集 /journals/edit/:id
  * - 摘要入力でAIが勘定科目を自動推定
- * - レシート画像を添付して仕訳と紐付け保存
+ * - レシート画像/PDFを添付して仕訳と紐付け保存
  * - 複合仕訳: 1取引で複数の借方/貸方行を持てる
+ * - 決済カード: どのカード/決済手段で支払ったかを記録
  */
 
 import { Button } from "@/components/ui/button";
@@ -30,7 +31,7 @@ import {
   DialogContent,
   DialogTitle,
 } from "@/components/ui/dialog";
-import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
+import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import {
   getAllAccounts,
   getAllJournals,
@@ -43,10 +44,25 @@ import {
 } from "@/lib/db";
 import { suggestJournalAccounts, getConfidenceLabel, type AISuggestion } from "@/lib/ai-journal";
 import { CATEGORY_LABELS, getToday } from "@/lib/utils";
-import { Save, Plus, Trash2, Sparkles, Check, X, Camera, Image as ImageIcon, ArrowLeft, Layers } from "lucide-react";
+import { Save, Plus, Trash2, Sparkles, Check, X, Camera, Image as ImageIcon, ArrowLeft, Layers, CreditCard } from "lucide-react";
 import { useEffect, useState, useMemo, useCallback, useRef } from "react";
 import { useLocation, useParams } from "wouter";
 import { toast } from "sonner";
+
+/* ─── Payment Method Presets ─── */
+const PAYMENT_PRESETS = [
+  "現金",
+  "楽天カード",
+  "三井住友カード",
+  "JCBカード",
+  "アメックス",
+  "PayPay",
+  "Suica",
+  "銀行振込",
+  "クレジットカード",
+  "デビットカード",
+  "電子マネー",
+];
 
 /* ─── Types ─── */
 
@@ -58,6 +74,7 @@ interface SimpleEntry {
   amount: string;
   description: string;
   memo: string;
+  paymentMethod: string;
   receiptFile?: File;
   receiptPreview?: string;
   existingReceiptId?: string;
@@ -75,6 +92,7 @@ interface CompoundEntry {
   date: string;
   description: string;
   memo: string;
+  paymentMethod: string;
   lines: CompoundLine[];
   receiptFile?: File;
   receiptPreview?: string;
@@ -90,6 +108,7 @@ function createEmptySimple(): SimpleEntry {
     amount: "",
     description: "",
     memo: "",
+    paymentMethod: "",
   };
 }
 
@@ -99,6 +118,7 @@ function createEmptyCompound(): CompoundEntry {
     date: getToday(),
     description: "",
     memo: "",
+    paymentMethod: "",
     lines: [
       { key: crypto.randomUUID(), side: "debit", accountId: "", amount: "" },
       { key: crypto.randomUUID(), side: "credit", accountId: "", amount: "" },
@@ -143,13 +163,15 @@ export default function JournalForm() {
   const debounceTimers = useRef<Record<string, ReturnType<typeof setTimeout>>>({});
   const fileInputRefs = useRef<Record<string, HTMLInputElement | null>>({});
 
+  // Custom payment method input
+  const [showCustomPayment, setShowCustomPayment] = useState<Record<string, boolean>>({});
+
   // Load accounts and past journals
   useEffect(() => {
     Promise.all([getAllAccounts(), getAllJournals()]).then(([accs, journals]) => {
       setAccounts(accs);
       setPastJournals(journals);
 
-      // If editing, load the existing journal
       if (editId) {
         const existing = journals.find((j) => j.id === editId);
         if (existing) {
@@ -162,10 +184,10 @@ export default function JournalForm() {
               amount: String(existing.amount),
               description: existing.description,
               memo: existing.memo || "",
+              paymentMethod: existing.paymentMethod || "",
               existingReceiptId: existing.receiptId,
             },
           ]);
-          // Load receipt if exists
           if (existing.receiptId) {
             getReceipt(existing.receiptId).then((r) => {
               if (r) {
@@ -233,15 +255,17 @@ export default function JournalForm() {
   }
 
   function handleReceiptSelect(entryKey: string, file: File) {
-    if (!file.type.startsWith("image/")) {
-      toast.error("画像ファイルを選択してください");
+    const isImage = file.type.startsWith("image/");
+    const isPdf = file.type === "application/pdf";
+    if (!isImage && !isPdf) {
+      toast.error("画像またはPDFファイルを選択してください");
       return;
     }
     if (file.size > 10 * 1024 * 1024) {
       toast.error("ファイルサイズは10MB以下にしてください");
       return;
     }
-    const previewUrl = URL.createObjectURL(file);
+    const previewUrl = isImage ? URL.createObjectURL(file) : "PDF";
     if (mode === "simple") {
       setEntries((prev) =>
         prev.map((e) =>
@@ -251,7 +275,7 @@ export default function JournalForm() {
     } else {
       setCompoundEntry((prev) => ({ ...prev, receiptFile: file, receiptPreview: previewUrl }));
     }
-    toast.success("レシート画像を添付しました");
+    toast.success(`${isPdf ? "PDF" : "レシート画像"}を添付しました`);
   }
 
   function removeReceipt(entryKey: string) {
@@ -259,12 +283,12 @@ export default function JournalForm() {
       setEntries((prev) =>
         prev.map((e) => {
           if (e.key !== entryKey) return e;
-          if (e.receiptPreview && !e.existingReceiptId) URL.revokeObjectURL(e.receiptPreview);
+          if (e.receiptPreview && e.receiptPreview !== "PDF" && !e.existingReceiptId) URL.revokeObjectURL(e.receiptPreview);
           return { ...e, receiptFile: undefined, receiptPreview: undefined, existingReceiptId: undefined };
         })
       );
     } else {
-      if (compoundEntry.receiptPreview && !compoundEntry.existingReceiptId) {
+      if (compoundEntry.receiptPreview && compoundEntry.receiptPreview !== "PDF" && !compoundEntry.existingReceiptId) {
         URL.revokeObjectURL(compoundEntry.receiptPreview);
       }
       setCompoundEntry((prev) => ({ ...prev, receiptFile: undefined, receiptPreview: undefined, existingReceiptId: undefined }));
@@ -296,14 +320,14 @@ export default function JournalForm() {
     const lastEntry = entries[entries.length - 1];
     setEntries((prev) => [
       ...prev,
-      { ...createEmptySimple(), date: lastEntry?.date || getToday() },
+      { ...createEmptySimple(), date: lastEntry?.date || getToday(), paymentMethod: lastEntry?.paymentMethod || "" },
     ]);
   }
 
   function removeEntry(index: number) {
     if (entries.length <= 1) return;
     const removed = entries[index];
-    if (removed.receiptPreview && !removed.existingReceiptId) URL.revokeObjectURL(removed.receiptPreview);
+    if (removed.receiptPreview && removed.receiptPreview !== "PDF" && !removed.existingReceiptId) URL.revokeObjectURL(removed.receiptPreview);
     setSuggestions((prev) => {
       const next = { ...prev };
       delete next[removed.key];
@@ -343,7 +367,6 @@ export default function JournalForm() {
       const now = new Date().toISOString();
 
       if (mode === "simple") {
-        // Validate
         for (let i = 0; i < entries.length; i++) {
           const e = entries[i];
           if (!e.date || !e.debitAccountId || !e.creditAccountId || !e.amount) {
@@ -391,7 +414,8 @@ export default function JournalForm() {
             creditAccountId: e.creditAccountId,
             amount: Number(e.amount),
             description: e.description,
-            memo: e.memo,
+            memo: e.memo || undefined,
+            paymentMethod: e.paymentMethod || undefined,
             receiptId,
             createdAt: isEdit ? (pastJournals.find((j) => j.id === journalId)?.createdAt || now) : now,
             updatedAt: now,
@@ -400,7 +424,7 @@ export default function JournalForm() {
         }
         toast.success(isEdit ? "仕訳を更新しました" : `${entries.length}件の仕訳を保存しました`);
       } else {
-        // Compound mode validation
+        // Compound mode
         const ce = compoundEntry;
         if (!ce.date || !ce.description) {
           toast.error("日付と摘要は必須です");
@@ -429,7 +453,6 @@ export default function JournalForm() {
           return;
         }
 
-        // Save compound as multiple simple journals with a shared tag
         const compoundGroupId = crypto.randomUUID();
         let receiptId: string | undefined;
         if (ce.receiptFile) {
@@ -446,10 +469,11 @@ export default function JournalForm() {
           });
         }
 
-        // Create journal entries for each debit-credit pair
-        // Strategy: match debit lines with credit lines
-        for (const dl of debitLines) {
-          for (const cl of creditLines) {
+        // Clone lines to avoid mutation
+        const dLines = debitLines.map((l) => ({ ...l }));
+        const cLines = creditLines.map((l) => ({ ...l }));
+        for (const dl of dLines) {
+          for (const cl of cLines) {
             const amount = Math.min(Number(dl.amount), Number(cl.amount));
             if (amount <= 0) continue;
             const journal: JournalEntry = {
@@ -460,13 +484,13 @@ export default function JournalForm() {
               amount,
               description: ce.description,
               memo: ce.memo || undefined,
-              receiptId: receiptId,
+              paymentMethod: ce.paymentMethod || undefined,
+              receiptId,
               tags: [compoundGroupId],
               createdAt: now,
               updatedAt: now,
             };
             await putJournal(journal);
-            // Reduce remaining amounts
             dl.amount = String(Number(dl.amount) - amount);
             cl.amount = String(Number(cl.amount) - amount);
           }
@@ -506,27 +530,94 @@ export default function JournalForm() {
     );
   }
 
+  /* ─── Payment method selector ─── */
+  function PaymentMethodSelect({ entryKey, value, onChange }: { entryKey: string; value: string; onChange: (v: string) => void }) {
+    const isCustom = showCustomPayment[entryKey];
+    return (
+      <div>
+        <Label className="text-[12px] font-semibold">
+          <CreditCard className="inline h-3 w-3 mr-1 -mt-0.5" />
+          決済手段（任意）
+        </Label>
+        {isCustom ? (
+          <div className="mt-1 flex gap-2">
+            <Input
+              placeholder="カード名を入力"
+              value={value}
+              onChange={(e) => onChange(e.target.value)}
+              className="text-[13px]"
+            />
+            <Button
+              variant="ghost"
+              size="sm"
+              className="h-9 text-[11px] shrink-0"
+              onClick={() => setShowCustomPayment((prev) => ({ ...prev, [entryKey]: false }))}
+            >
+              一覧
+            </Button>
+          </div>
+        ) : (
+          <div className="mt-1 flex gap-2">
+            <Select value={value} onValueChange={onChange}>
+              <SelectTrigger className="text-[13px]">
+                <SelectValue placeholder="選択してください" />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="__none__" className="text-[13px] text-muted-foreground">
+                  未設定
+                </SelectItem>
+                {PAYMENT_PRESETS.map((p) => (
+                  <SelectItem key={p} value={p} className="text-[13px]">
+                    {p}
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+            <Button
+              variant="ghost"
+              size="sm"
+              className="h-9 text-[11px] shrink-0"
+              onClick={() => setShowCustomPayment((prev) => ({ ...prev, [entryKey]: true }))}
+            >
+              手入力
+            </Button>
+          </div>
+        )}
+      </div>
+    );
+  }
+
   /* ─── Receipt attachment UI ─── */
   function ReceiptAttachment({ entryKey, preview, receiptFile }: { entryKey: string; preview?: string; receiptFile?: File }) {
+    const isPdf = preview === "PDF" || receiptFile?.type === "application/pdf";
     return (
       <div>
         <Label className="text-[12px] font-semibold">
           <Camera className="inline h-3 w-3 mr-1 -mt-0.5" />
-          レシート画像（任意）
+          レシート（画像/PDF、任意）
         </Label>
         <div className="mt-1">
           {preview ? (
             <div className="flex items-start gap-3">
-              <button
-                type="button"
-                onClick={() => setPreviewImage(preview)}
-                className="relative group rounded-lg overflow-hidden border border-border shrink-0"
-              >
-                <img src={preview} alt="レシート" className="h-20 w-20 object-cover" />
-                <div className="absolute inset-0 bg-black/0 group-hover:bg-black/30 transition-colors flex items-center justify-center">
-                  <ImageIcon className="h-5 w-5 text-white opacity-0 group-hover:opacity-100 transition-opacity" />
+              {isPdf ? (
+                <div className="h-20 w-20 flex items-center justify-center rounded-lg border border-border bg-muted/20 shrink-0">
+                  <div className="text-center">
+                    <div className="text-[20px] font-bold text-primary">PDF</div>
+                    <div className="text-[10px] text-muted-foreground">添付済</div>
+                  </div>
                 </div>
-              </button>
+              ) : (
+                <button
+                  type="button"
+                  onClick={() => setPreviewImage(preview)}
+                  className="relative group rounded-lg overflow-hidden border border-border shrink-0"
+                >
+                  <img src={preview} alt="レシート" className="h-20 w-20 object-cover" />
+                  <div className="absolute inset-0 bg-black/0 group-hover:bg-black/30 transition-colors flex items-center justify-center">
+                    <ImageIcon className="h-5 w-5 text-white opacity-0 group-hover:opacity-100 transition-opacity" />
+                  </div>
+                </button>
+              )}
               <div className="flex flex-col gap-1">
                 <span className="text-[12px] text-muted-foreground truncate max-w-[200px]">
                   {receiptFile?.name || "保存済みレシート"}
@@ -547,7 +638,7 @@ export default function JournalForm() {
               <input
                 ref={(el) => { fileInputRefs.current[entryKey] = el; }}
                 type="file"
-                accept="image/*"
+                accept="image/*,application/pdf"
                 capture="environment"
                 className="hidden"
                 onChange={(e) => {
@@ -563,7 +654,7 @@ export default function JournalForm() {
                 onClick={() => fileInputRefs.current[entryKey]?.click()}
               >
                 <Camera className="h-3.5 w-3.5 mr-1.5" />
-                レシートを撮影・選択
+                レシートを撮影・選択（画像/PDF）
               </Button>
             </div>
           )}
@@ -626,7 +717,7 @@ export default function JournalForm() {
         </div>
       </div>
 
-      {/* Mode tabs (only for new entries) */}
+      {/* Mode tabs */}
       {!isEdit && (
         <Tabs value={mode} onValueChange={(v) => setMode(v as "simple" | "compound")} className="mb-4">
           <TabsList className="h-9">
@@ -657,9 +748,15 @@ export default function JournalForm() {
                   </CardTitle>
                   <div className="flex items-center gap-1">
                     {entry.receiptPreview && (
-                      <span className="text-[10px] font-bold text-green-600 bg-green-50 px-1.5 py-0.5 rounded-full">
+                      <span className="text-[10px] font-bold text-green-600 bg-green-50 dark:bg-green-900/30 dark:text-green-400 px-1.5 py-0.5 rounded-full">
                         <Camera className="inline h-3 w-3 mr-0.5" />
                         レシート添付済
+                      </span>
+                    )}
+                    {entry.paymentMethod && (
+                      <span className="text-[10px] font-bold text-blue-600 bg-blue-50 dark:bg-blue-900/30 dark:text-blue-400 px-1.5 py-0.5 rounded-full">
+                        <CreditCard className="inline h-3 w-3 mr-0.5" />
+                        {entry.paymentMethod}
                       </span>
                     )}
                     {entries.length > 1 && !isEdit && (
@@ -747,6 +844,13 @@ export default function JournalForm() {
                     </div>
                   </div>
 
+                  {/* Payment method */}
+                  <PaymentMethodSelect
+                    entryKey={entry.key}
+                    value={entry.paymentMethod}
+                    onChange={(v) => updateEntry(index, "paymentMethod", v === "__none__" ? "" : v)}
+                  />
+
                   <div>
                     <Label className="text-[12px] font-semibold">メモ（任意）</Label>
                     <Input placeholder="補足メモ" value={entry.memo} onChange={(e) => updateEntry(index, "memo", e.target.value)} className="mt-1 text-[13px]" />
@@ -791,7 +895,7 @@ export default function JournalForm() {
             {/* Debit lines */}
             <div>
               <div className="flex items-center justify-between mb-2">
-                <Label className="text-[12px] font-bold text-blue-700">借方（左）</Label>
+                <Label className="text-[12px] font-bold text-blue-700 dark:text-blue-400">借方（左）</Label>
                 <Button variant="outline" size="sm" className="h-6 text-[11px]" onClick={() => addCompoundLine("debit")}>
                   <Plus className="h-3 w-3 mr-0.5" />行追加
                 </Button>
@@ -815,7 +919,7 @@ export default function JournalForm() {
                   </div>
                 ))}
               </div>
-              <div className="mt-1 text-right text-[12px] font-mono font-bold text-blue-700">
+              <div className="mt-1 text-right text-[12px] font-mono font-bold text-blue-700 dark:text-blue-400">
                 借方合計: ¥{compoundEntry.lines.filter((l) => l.side === "debit").reduce((s, l) => s + (Number(l.amount) || 0), 0).toLocaleString()}
               </div>
             </div>
@@ -823,7 +927,7 @@ export default function JournalForm() {
             {/* Credit lines */}
             <div>
               <div className="flex items-center justify-between mb-2">
-                <Label className="text-[12px] font-bold text-red-700">貸方（右）</Label>
+                <Label className="text-[12px] font-bold text-red-700 dark:text-red-400">貸方（右）</Label>
                 <Button variant="outline" size="sm" className="h-6 text-[11px]" onClick={() => addCompoundLine("credit")}>
                   <Plus className="h-3 w-3 mr-0.5" />行追加
                 </Button>
@@ -847,7 +951,7 @@ export default function JournalForm() {
                   </div>
                 ))}
               </div>
-              <div className="mt-1 text-right text-[12px] font-mono font-bold text-red-700">
+              <div className="mt-1 text-right text-[12px] font-mono font-bold text-red-700 dark:text-red-400">
                 貸方合計: ¥{compoundEntry.lines.filter((l) => l.side === "credit").reduce((s, l) => s + (Number(l.amount) || 0), 0).toLocaleString()}
               </div>
             </div>
@@ -866,6 +970,13 @@ export default function JournalForm() {
               }
               return null;
             })()}
+
+            {/* Payment method for compound */}
+            <PaymentMethodSelect
+              entryKey={compoundEntry.key}
+              value={compoundEntry.paymentMethod}
+              onChange={(v) => setCompoundEntry((prev) => ({ ...prev, paymentMethod: v === "__none__" ? "" : v }))}
+            />
 
             <div>
               <Label className="text-[12px] font-semibold">メモ（任意）</Label>

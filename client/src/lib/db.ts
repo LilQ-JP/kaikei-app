@@ -31,6 +31,7 @@ export interface JournalEntry {
   description: string;
   memo?: string;
   receiptId?: string;
+  paymentMethod?: string; // カード名・決済手段（例: 楽天カード, PayPay, 現金）
   tags?: string[];
   createdAt: string;
   updatedAt: string;

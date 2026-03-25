@@ -1,9 +1,11 @@
 /**
  * AppLayout — macOS Finder-style sidebar + main content layout
  * Design: macOS Ledger — frosted glass sidebar, clean white main area
+ * Dark mode toggle in sidebar footer
  */
 
 import { cn } from "@/lib/utils";
+import { useTheme } from "@/contexts/ThemeContext";
 import {
   BarChart3,
   BookOpen,
@@ -22,6 +24,9 @@ import {
   Percent,
   TrendingUp,
   FileSpreadsheet,
+  PieChart,
+  Moon,
+  Sun,
 } from "lucide-react";
 import { useState } from "react";
 import { Link, useLocation } from "wouter";
@@ -41,6 +46,7 @@ const NAV_ITEMS: NavItem[] = [
   { icon: BarChart3, label: "総勘定元帳", href: "/ledger", group: "帳簿" },
   { icon: Calculator, label: "試算表", href: "/trial-balance", group: "帳簿" },
   { icon: TrendingUp, label: "月次推移表", href: "/monthly-trend", group: "帳簿" },
+  { icon: PieChart, label: "レポート", href: "/reports", group: "帳簿" },
   { icon: FileText, label: "損益計算書", href: "/pl", group: "決算" },
   { icon: FileText, label: "貸借対照表", href: "/bs", group: "決算" },
   { icon: Percent, label: "家事按分", href: "/home-expense", group: "決算" },
@@ -57,6 +63,7 @@ const NAV_ITEMS: NavItem[] = [
 export default function AppLayout({ children }: { children: React.ReactNode }) {
   const [location] = useLocation();
   const [sidebarOpen, setSidebarOpen] = useState(false);
+  const { theme, toggleTheme } = useTheme();
 
   const groups = NAV_ITEMS.reduce<Record<string, NavItem[]>>((acc, item) => {
     if (!acc[item.group]) acc[item.group] = [];
@@ -138,9 +145,25 @@ export default function AppLayout({ children }: { children: React.ReactNode }) {
           ))}
         </nav>
 
-        {/* Footer */}
-        <div className="border-t border-sidebar-border px-4 py-3">
-          <div className="text-[11px] text-muted-foreground">
+        {/* Footer with dark mode toggle */}
+        <div className="border-t border-sidebar-border px-4 py-3 space-y-2">
+          <button
+            onClick={toggleTheme}
+            className="flex w-full items-center gap-2.5 rounded-lg px-2.5 py-[7px] text-[13px] font-semibold text-sidebar-foreground/70 hover:bg-sidebar-accent/60 hover:text-sidebar-foreground transition-colors"
+          >
+            {theme === "light" ? (
+              <>
+                <Moon className="h-4 w-4 shrink-0" />
+                ダークモード
+              </>
+            ) : (
+              <>
+                <Sun className="h-4 w-4 shrink-0" />
+                ライトモード
+              </>
+            )}
+          </button>
+          <div className="text-[11px] text-muted-foreground px-2.5">
             データはブラウザに保存されます
           </div>
         </div>

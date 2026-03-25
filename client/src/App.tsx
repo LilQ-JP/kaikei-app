@@ -26,6 +26,7 @@ import HomeExpense from "./pages/HomeExpense";
 import FixedAssets from "./pages/FixedAssets";
 import ConsumptionTax from "./pages/ConsumptionTax";
 import MonthlyTrend from "./pages/MonthlyTrend";
+import Reports from "./pages/Reports";
 
 function Router() {
   return (
@@ -40,6 +41,7 @@ function Router() {
         <Route path="/ledger" component={Ledger} />
         <Route path="/trial-balance" component={TrialBalance} />
         <Route path="/monthly-trend" component={MonthlyTrend} />
+        <Route path="/reports" component={Reports} />
         <Route path="/pl" component={ProfitLoss} />
         <Route path="/bs" component={BalanceSheet} />
         <Route path="/tax-filing" component={TaxFiling} />
@@ -75,7 +77,7 @@ function App() {
 
   return (
     <ErrorBoundary>
-      <ThemeProvider defaultTheme="light">
+      <ThemeProvider defaultTheme="light" switchable>
         <TooltipProvider>
           <Toaster />
           <Router />
