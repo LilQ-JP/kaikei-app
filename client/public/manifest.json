@@ -1,0 +1,26 @@
+{
+  "name": "フリーランス会計",
+  "short_name": "会計",
+  "description": "個人事業主向け無料会計アプリ。仕訳入力、請求書作成、確定申告サポートまで全機能搭載。",
+  "start_url": "/",
+  "display": "standalone",
+  "background_color": "#ffffff",
+  "theme_color": "#1d4ed8",
+  "orientation": "any",
+  "categories": ["finance", "business", "productivity"],
+  "lang": "ja",
+  "icons": [
+    {
+      "src": "/icon-192.png",
+      "sizes": "192x192",
+      "type": "image/png",
+      "purpose": "any maskable"
+    },
+    {
+      "src": "/icon-512.png",
+      "sizes": "512x512",
+      "type": "image/png",
+      "purpose": "any maskable"
+    }
+  ]
+}
