@@ -38,13 +38,15 @@ import {
   putJournal,
   putReceipt,
   getReceipt,
+  getAllVendors,
   type AccountItem,
   type JournalEntry,
   type Receipt,
+  type Vendor,
 } from "@/lib/db";
 import { suggestJournalAccounts, getConfidenceLabel, type AISuggestion } from "@/lib/ai-journal";
 import { CATEGORY_LABELS, getToday } from "@/lib/utils";
-import { Save, Plus, Trash2, Sparkles, Check, X, Camera, Image as ImageIcon, ArrowLeft, Layers, CreditCard } from "lucide-react";
+import { Save, Plus, Trash2, Sparkles, Check, X, Camera, Image as ImageIcon, ArrowLeft, Layers, CreditCard, Users } from "lucide-react";
 import { useEffect, useState, useMemo, useCallback, useRef } from "react";
 import { useLocation, useParams } from "wouter";
 import { toast } from "sonner";
@@ -159,6 +161,7 @@ export default function JournalForm() {
   // Compound mode state
   const [compoundEntry, setCompoundEntry] = useState<CompoundEntry>(createEmptyCompound());
 
+  const [vendors, setVendors] = useState<Vendor[]>([]);
   const [previewImage, setPreviewImage] = useState<string | null>(null);
   const debounceTimers = useRef<Record<string, ReturnType<typeof setTimeout>>>({});
   const fileInputRefs = useRef<Record<string, HTMLInputElement | null>>({});
@@ -166,11 +169,12 @@ export default function JournalForm() {
   // Custom payment method input
   const [showCustomPayment, setShowCustomPayment] = useState<Record<string, boolean>>({});
 
-  // Load accounts and past journals
+  // Load accounts, past journals, and vendors
   useEffect(() => {
-    Promise.all([getAllAccounts(), getAllJournals()]).then(([accs, journals]) => {
+    Promise.all([getAllAccounts(), getAllJournals(), getAllVendors()]).then(([accs, journals, vends]) => {
       setAccounts(accs);
       setPastJournals(journals);
+      setVendors(vends);
 
       if (editId) {
         const existing = journals.find((j) => j.id === editId);
@@ -772,6 +776,47 @@ export default function JournalForm() {
                   </div>
                 </CardHeader>
                 <CardContent className="space-y-4">
+                  {/* Vendor quick select */}
+                  {vendors.length > 0 && (
+                    <div>
+                      <Label className="text-[12px] font-semibold">
+                        <Users className="inline h-3 w-3 mr-1 -mt-0.5" />
+                        取引先から入力（任意）
+                      </Label>
+                      <Select
+                        value="__placeholder__"
+                        onValueChange={(vendorId) => {
+                          const vendor = vendors.find((v) => v.id === vendorId);
+                          if (!vendor) return;
+                          setEntries((prev) =>
+                            prev.map((e, i) => {
+                              if (i !== index) return e;
+                              return {
+                                ...e,
+                                description: e.description || vendor.name,
+                                debitAccountId: vendor.defaultDebitAccountId || e.debitAccountId,
+                                creditAccountId: vendor.defaultCreditAccountId || e.creditAccountId,
+                                paymentMethod: vendor.defaultPaymentMethod || e.paymentMethod,
+                              };
+                            })
+                          );
+                          toast.success(`取引先「${vendor.name}」の情報を反映しました`);
+                        }}
+                      >
+                        <SelectTrigger className="mt-1 text-[13px]">
+                          <SelectValue placeholder="登録済み取引先を選択" />
+                        </SelectTrigger>
+                        <SelectContent>
+                          {vendors.map((v) => (
+                            <SelectItem key={v.id} value={v.id} className="text-[13px]">
+                              {v.name}{v.shortName ? ` (${v.shortName})` : ""}
+                            </SelectItem>
+                          ))}
+                        </SelectContent>
+                      </Select>
+                    </div>
+                  )}
+
                   {/* Description */}
                   <div>
                     <Label className="text-[12px] font-semibold">

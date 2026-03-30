@@ -45,7 +45,8 @@ import {
   type AccountItem,
 } from "@/lib/db";
 import { formatYen, getToday } from "@/lib/utils";
-import { Camera, ImageIcon, Plus, Trash2, X, ZoomIn, BookOpen, Link2, FileText } from "lucide-react";
+import { Camera, ImageIcon, Plus, Trash2, X, ZoomIn, BookOpen, Link2, FileText, Sparkles, Check } from "lucide-react";
+import { analyzeReceipt, getReceiptConfidenceLabel, type ReceiptAnalysis } from "@/lib/receipt-ai";
 import { useEffect, useState, useCallback, useRef, useMemo } from "react";
 import { toast } from "sonner";
 
@@ -71,6 +72,7 @@ export default function Receipts() {
   const [vendor, setVendor] = useState("");
   const [description, setDescription] = useState("");
   const fileInputRef = useRef<HTMLInputElement>(null);
+  const [aiAnalysis, setAiAnalysis] = useState<ReceiptAnalysis | null>(null);
 
   const load = useCallback(async () => {
     const [r, j, a] = await Promise.all([getAllReceipts(), getAllJournals(), getAllAccounts()]);
@@ -129,6 +131,13 @@ export default function Receipts() {
       setFileData(ev.target?.result as string);
     };
     reader.readAsDataURL(file);
+
+    // Run AI analysis on file name
+    const analysis = analyzeReceipt(file.name, description || vendor, accounts);
+    setAiAnalysis(analysis);
+    if (analysis.amount && !amount) setAmount(String(analysis.amount));
+    if (analysis.date && !date) setDate(analysis.date);
+    if (analysis.storeName && !vendor) setVendor(analysis.storeName);
   }
 
   async function handleSave() {
@@ -158,6 +167,7 @@ export default function Receipts() {
     setFileName("");
     setFileIsPdf(false);
     setDate(getToday());
+    setAiAnalysis(null);
     setAmount("");
     setVendor("");
     setDescription("");
@@ -254,8 +264,39 @@ export default function Receipts() {
 
               <div>
                 <Label className="text-[12px] font-semibold">メモ</Label>
-                <Input value={description} onChange={(e) => setDescription(e.target.value)} className="mt-1 text-[13px]" placeholder="補足メモ" />
+                <Input value={description} onChange={(e) => {
+                  setDescription(e.target.value);
+                  if (fileName) {
+                    const analysis = analyzeReceipt(fileName, e.target.value || vendor, accounts);
+                    setAiAnalysis(analysis);
+                  }
+                }} className="mt-1 text-[13px]" placeholder="補足メモ" />
               </div>
+
+              {/* AI Analysis Result */}
+              {aiAnalysis && aiAnalysis.confidence > 0 && (
+                <div className="p-3 rounded-lg bg-primary/5 border border-primary/15">
+                  <div className="flex items-center gap-2 mb-2">
+                    <Sparkles className="h-4 w-4 text-primary" />
+                    <span className="text-[12px] font-bold text-primary">AI自動判定</span>
+                    {(() => {
+                      const conf = getReceiptConfidenceLabel(aiAnalysis.confidence);
+                      return (
+                        <span className={`inline-flex items-center rounded-full px-1.5 py-0.5 text-[10px] font-bold ${conf.color}`}>
+                          信頼度 {conf.label} ({aiAnalysis.confidence}%)
+                        </span>
+                      );
+                    })()}
+                  </div>
+                  <div className="space-y-1">
+                    <div className="text-[12px]">
+                      <span className="font-semibold">推定科目:</span> 借方 {aiAnalysis.suggestedDebitAccountName} / 貸方 {aiAnalysis.suggestedCreditAccountName}
+                    </div>
+                    <div className="text-[11px] text-muted-foreground">{aiAnalysis.reason}</div>
+                  </div>
+                  <p className="text-[10px] text-muted-foreground mt-2">※ 仕訳入力時にAI自動仕訳機能でこの推定を活用できます</p>
+                </div>
+              )}
 
               <div className="flex justify-end gap-2 pt-2">
                 <Button variant="outline" onClick={() => { setDialogOpen(false); resetForm(); }}>キャンセル</Button>

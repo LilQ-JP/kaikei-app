@@ -67,9 +67,12 @@ function generateInvoiceHTML(invoice: Invoice, profile?: BusinessProfile): strin
   <div class="page">
     <!-- Header -->
     <div style="display:flex;justify-content:space-between;align-items:flex-start;margin-bottom:32px;">
-      <div>
-        <h1 style="font-size:28px;font-weight:700;letter-spacing:-0.02em;color:#1d1d1f;">請求書</h1>
-        <div style="margin-top:6px;font-size:12px;color:#86868b;">INVOICE</div>
+      <div style="display:flex;align-items:center;gap:16px;">
+        ${profile?.logoData ? `<img src="${profile.logoData}" style="max-height:48px;max-width:120px;object-fit:contain;" alt="Logo" />` : ""}
+        <div>
+          <h1 style="font-size:28px;font-weight:700;letter-spacing:-0.02em;color:#1d1d1f;">請求書</h1>
+          <div style="margin-top:6px;font-size:12px;color:#86868b;">INVOICE</div>
+        </div>
       </div>
       <div style="text-align:right;">
         <div style="font-size:12px;color:#86868b;margin-bottom:4px;">請求書番号</div>

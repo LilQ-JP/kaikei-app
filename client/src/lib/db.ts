@@ -92,6 +92,22 @@ export interface BusinessProfile {
   bankAccountName?: string;
   fiscalYearStart: number; // month 1-12
   taxFilingType: "blue" | "white"; // 青色申告 / 白色申告
+  logoData?: string; // base64 encoded logo image
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface Vendor {
+  id: string;
+  name: string;
+  shortName?: string;
+  address?: string;
+  phone?: string;
+  email?: string;
+  defaultDebitAccountId?: string;
+  defaultCreditAccountId?: string;
+  defaultPaymentMethod?: string;
+  notes?: string;
   createdAt: string;
   updatedAt: string;
 }
@@ -148,6 +164,13 @@ interface KaikeiDB extends DBSchema {
   settings: {
     key: string;
     value: AppSettings;
+  };
+  vendors: {
+    key: string;
+    value: Vendor;
+    indexes: {
+      "by-name": string;
+    };
   };
 }
 
@@ -252,6 +275,10 @@ export async function getDB(): Promise<IDBPDatabase<KaikeiDB>> {
 
       // Settings store
       db.createObjectStore("settings", { keyPath: "id" });
+
+      // Vendors store
+      const vendorStore = db.createObjectStore("vendors", { keyPath: "id" });
+      vendorStore.createIndex("by-name", "name");
     },
   });
 
@@ -481,6 +508,28 @@ export async function importAllData(jsonString: string): Promise<void> {
   }
 }
 
+// Vendors
+export async function getAllVendors(): Promise<Vendor[]> {
+  const db = await getDB();
+  const all = await db.getAll("vendors");
+  return all.sort((a, b) => a.name.localeCompare(b.name, "ja"));
+}
+
+export async function getVendor(id: string): Promise<Vendor | undefined> {
+  const db = await getDB();
+  return db.get("vendors", id);
+}
+
+export async function putVendor(vendor: Vendor): Promise<void> {
+  const db = await getDB();
+  await db.put("vendors", vendor);
+}
+
+export async function deleteVendor(id: string): Promise<void> {
+  const db = await getDB();
+  await db.delete("vendors", id);
+}
+
 // Clear all data
 export async function clearAllData(): Promise<void> {
   const db = await getDB();
@@ -490,5 +539,6 @@ export async function clearAllData(): Promise<void> {
   await db.clear("receipts");
   await db.clear("profile");
   await db.clear("settings");
+  try { await db.clear("vendors"); } catch {}
   await initializeDB();
 }

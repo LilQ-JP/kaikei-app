@@ -27,6 +27,8 @@ import FixedAssets from "./pages/FixedAssets";
 import ConsumptionTax from "./pages/ConsumptionTax";
 import MonthlyTrend from "./pages/MonthlyTrend";
 import Reports from "./pages/Reports";
+import Vendors from "./pages/Vendors";
+import AiChat from "./components/AiChat";
 
 function Router() {
   return (
@@ -51,6 +53,7 @@ function Router() {
         <Route path="/receipts" component={Receipts} />
         <Route path="/accounts" component={Accounts} />
         <Route path="/data" component={DataManagement} />
+        <Route path="/vendors" component={Vendors} />
         <Route path="/profile" component={Profile} />
         <Route path="/seed" component={Seed} />
         <Route path="/404" component={NotFound} />
@@ -81,6 +84,7 @@ function App() {
         <TooltipProvider>
           <Toaster />
           <Router />
+          <AiChat />
         </TooltipProvider>
       </ThemeProvider>
     </ErrorBoundary>
