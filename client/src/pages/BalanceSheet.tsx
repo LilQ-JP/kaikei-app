@@ -15,6 +15,7 @@ import { formatYen, downloadFile } from "@/lib/utils";
 import { Download } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
 import { toast } from "sonner";
+import { calculateBalanceSheet } from "@shared/accounting";
 
 export default function BalanceSheet() {
   const [journals, setJournals] = useState<JournalEntry[]>([]);
@@ -37,62 +38,10 @@ export default function BalanceSheet() {
     [journals, year]
   );
 
-  const accountMap = useMemo(() => {
-    const map = new Map<string, AccountItem>();
-    accounts.forEach((a) => map.set(a.id, a));
-    return map;
-  }, [accounts]);
-
   const bsData = useMemo(() => {
-    // Calculate balances
-    const balances = new Map<string, number>();
-
-    yearJournals.forEach((j) => {
-      const debitAcc = accountMap.get(j.debitAccountId);
-      const creditAcc = accountMap.get(j.creditAccountId);
-
-      if (debitAcc) {
-        const isDebitNormal = debitAcc.category === "asset" || debitAcc.category === "expense";
-        const current = balances.get(debitAcc.id) || 0;
-        balances.set(debitAcc.id, current + (isDebitNormal ? j.amount : -j.amount));
-      }
-      if (creditAcc) {
-        const isDebitNormal = creditAcc.category === "asset" || creditAcc.category === "expense";
-        const current = balances.get(creditAcc.id) || 0;
-        balances.set(creditAcc.id, current + (isDebitNormal ? -j.amount : j.amount));
-      }
-    });
-
-    const assetItems: { account: AccountItem; balance: number }[] = [];
-    const liabilityItems: { account: AccountItem; balance: number }[] = [];
-    const equityItems: { account: AccountItem; balance: number }[] = [];
-
-    // Calculate net income for the year
-    let netIncome = 0;
     const currentYearJournals = journals.filter((j) => j.date.startsWith(String(year)));
-    currentYearJournals.forEach((j) => {
-      const creditAcc = accountMap.get(j.creditAccountId);
-      const debitAcc = accountMap.get(j.debitAccountId);
-      if (creditAcc?.category === "income") netIncome += j.amount;
-      if (debitAcc?.category === "expense") netIncome -= j.amount;
-    });
-
-    accounts
-      .sort((a, b) => a.code.localeCompare(b.code))
-      .forEach((acc) => {
-        const balance = balances.get(acc.id) || 0;
-        if (balance === 0) return;
-        if (acc.category === "asset") assetItems.push({ account: acc, balance });
-        if (acc.category === "liability") liabilityItems.push({ account: acc, balance });
-        if (acc.category === "equity") equityItems.push({ account: acc, balance });
-      });
-
-    const totalAssets = assetItems.reduce((sum, i) => sum + i.balance, 0);
-    const totalLiabilities = liabilityItems.reduce((sum, i) => sum + i.balance, 0);
-    const totalEquity = equityItems.reduce((sum, i) => sum + i.balance, 0) + netIncome;
-
-    return { assetItems, liabilityItems, equityItems, totalAssets, totalLiabilities, totalEquity, netIncome };
-  }, [yearJournals, accountMap, accounts, journals, year]);
+    return calculateBalanceSheet(accounts, yearJournals, currentYearJournals);
+  }, [yearJournals, accounts, journals, year]);
 
   function handleExport() {
     const lines: string[] = [`貸借対照表 ${year}年12月31日現在`, ""];

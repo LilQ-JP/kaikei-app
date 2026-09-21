@@ -37,6 +37,7 @@ import {
 } from "@/components/ui/alert-dialog";
 import {
   getAllAccounts,
+  getAllJournals,
   putJournal,
   type AccountItem,
   type JournalEntry,
@@ -45,6 +46,7 @@ import { formatYen } from "@/lib/utils";
 import { Plus, Trash2, Calculator, Save, Building2, Info } from "lucide-react";
 import { useEffect, useState, useMemo } from "react";
 import { toast } from "sonner";
+import { loadAppJson, saveAppJson } from "@/lib/app-storage";
 
 interface FixedAsset {
   id: string;
@@ -76,19 +78,6 @@ const USEFUL_LIFE_PRESETS = [
   { label: "カメラ・映像機器", years: 5, category: "器具備品" },
 ];
 
-function loadAssets(): FixedAsset[] {
-  try {
-    const data = localStorage.getItem(STORAGE_KEY);
-    return data ? JSON.parse(data) : [];
-  } catch {
-    return [];
-  }
-}
-
-function saveAssets(assets: FixedAsset[]) {
-  localStorage.setItem(STORAGE_KEY, JSON.stringify(assets));
-}
-
 /** 定額法: (取得価額 - 残存価額) / 耐用年数 */
 function straightLineDepreciation(cost: number, salvageRate: number, usefulLife: number): number {
   return Math.round((cost - cost * salvageRate) / usefulLife);
@@ -96,8 +85,8 @@ function straightLineDepreciation(cost: number, salvageRate: number, usefulLife:
 
 /** 定率法: 未償却残高 × 償却率 */
 function decliningBalanceRate(usefulLife: number): number {
-  // 250%定率法（2012年4月以降取得分）
-  return Math.min(1, 2.5 / usefulLife);
+  // 200%定率法（平成24年4月1日以後取得分）。旧資産は別率表で管理する。
+  return Math.min(1, 2 / usefulLife);
 }
 
 function calculateDepreciationSchedule(asset: FixedAsset, targetYear: number) {
@@ -157,7 +146,7 @@ function calculateDepreciationSchedule(asset: FixedAsset, targetYear: number) {
 }
 
 export default function FixedAssets() {
-  const [assets, setAssets] = useState<FixedAsset[]>(loadAssets());
+  const [assets, setAssets] = useState<FixedAsset[]>([]);
   const [accounts, setAccounts] = useState<AccountItem[]>([]);
   const [year, setYear] = useState(new Date().getFullYear());
   const [showAddDialog, setShowAddDialog] = useState(false);
@@ -173,6 +162,10 @@ export default function FixedAssets() {
     salvageRate: 0,
     memo: "",
   });
+
+  useEffect(() => {
+    loadAppJson<FixedAsset[]>("fixedAssets", STORAGE_KEY, []).then(setAssets).catch(() => toast.error("固定資産を読み込めません"));
+  }, []);
 
   useEffect(() => {
     getAllAccounts().then(setAccounts);
@@ -206,7 +199,7 @@ export default function FixedAssets() {
     };
     const updated = [...assets, asset];
     setAssets(updated);
-    saveAssets(updated);
+    void saveAppJson("fixedAssets", STORAGE_KEY, updated);
     setShowAddDialog(false);
     setNewAsset({
       name: "", category: "器具備品", acquisitionDate: "", acquisitionCost: 0,
@@ -218,7 +211,7 @@ export default function FixedAssets() {
   function deleteAsset(id: string) {
     const updated = assets.filter((a) => a.id !== id);
     setAssets(updated);
-    saveAssets(updated);
+    void saveAppJson("fixedAssets", STORAGE_KEY, updated);
     toast.success("固定資産を削除しました");
   }
 
@@ -243,13 +236,21 @@ export default function FixedAssets() {
         return;
       }
 
-      // If no accumulated depreciation account, use the asset account directly
-      const creditAccountId = accumAcc?.id || depAcc.id;
+      if (!accumAcc) {
+        toast.error("「減価償却累計額」科目が見つかりません。勘定科目マスタを確認してください。");
+        setSaving(false);
+        return;
+      }
+
+      const creditAccountId = accumAcc.id;
+      const existingJournals = await getAllJournals();
       const now = new Date().toISOString();
       let count = 0;
 
       for (const sc of schedules) {
-        if (sc.depreciationThisYear <= 0 || sc.isFullyDepreciated) continue;
+        if (sc.depreciationThisYear <= 0) continue;
+        const sourceKey = `固定資産償却:${year}:${sc.asset.id}`;
+        if (existingJournals.some((journal) => journal.memo?.includes(sourceKey))) continue;
         const journal: JournalEntry = {
           id: crypto.randomUUID(),
           date: `${year}-12-31`,
@@ -257,7 +258,7 @@ export default function FixedAssets() {
           creditAccountId,
           amount: sc.depreciationThisYear,
           description: `減価償却 ${sc.asset.name} (${sc.asset.method === "straight-line" ? "定額法" : "定率法"})`,
-          memo: `固定資産台帳より自動仕訳 ${year}年度`,
+          memo: `固定資産台帳より自動仕訳 ${year}年度 ${sourceKey}`,
           createdAt: now,
           updatedAt: now,
         };

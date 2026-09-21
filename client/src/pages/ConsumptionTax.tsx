@@ -76,42 +76,45 @@ export default function ConsumptionTax() {
   );
 
   const taxData = useMemo(() => {
-    const taxRate = Number(defaultTaxRate) / 100;
-    const taxRateForCalc = taxRate / (1 + taxRate); // 税込から税額を算出
-
-    // 課税売上（収益科目の貸方合計）
     let taxableSales = 0;
+    let salesTax = 0;
     const salesByAccount = new Map<string, number>();
-
-    // 課税仕入（費用科目の借方合計）
+    const salesTaxByAccount = new Map<string, number>();
     let taxablePurchases = 0;
+    let purchaseTax = 0;
     const purchasesByAccount = new Map<string, number>();
+    const purchaseTaxByAccount = new Map<string, number>();
+    let unclassifiedCount = 0;
 
     yearJournals.forEach((j) => {
-      const creditAcc = accountMap.get(j.creditAccountId);
-      const debitAcc = accountMap.get(j.debitAccountId);
-
-      // 売上（収益）
-      if (creditAcc?.category === "income") {
-        taxableSales += j.amount;
-        salesByAccount.set(creditAcc.id, (salesByAccount.get(creditAcc.id) || 0) + j.amount);
+      const category = j.taxCategory;
+      const isSales = category === "taxable-sales" || category === "taxable-sales-reduced";
+      const isPurchase = category === "taxable-purchase" || category === "taxable-purchase-reduced";
+      if (!isSales && !isPurchase) {
+        if (!category || category === "out-of-scope") unclassifiedCount++;
+        return;
       }
-
-      // 仕入・経費
-      if (debitAcc?.category === "expense") {
-        taxablePurchases += j.amount;
-        purchasesByAccount.set(debitAcc.id, (purchasesByAccount.get(debitAcc.id) || 0) + j.amount);
+      const rate = j.taxRate ?? (category?.endsWith("-reduced") ? 8 : 10);
+      const tax = j.taxIncluded === false ? Math.floor(j.amount * rate / 100) : j.amount - Math.floor(j.amount * 100 / (100 + rate));
+      const base = j.taxIncluded === false ? j.amount : j.amount - tax;
+      const accountId = isSales ? j.creditAccountId : j.debitAccountId;
+      if (isSales) {
+        taxableSales += base;
+        salesTax += tax;
+        salesByAccount.set(accountId, (salesByAccount.get(accountId) || 0) + base);
+        salesTaxByAccount.set(accountId, (salesTaxByAccount.get(accountId) || 0) + tax);
+      } else {
+        taxablePurchases += base;
+        purchaseTax += tax;
+        purchasesByAccount.set(accountId, (purchasesByAccount.get(accountId) || 0) + base);
+        purchaseTaxByAccount.set(accountId, (purchaseTaxByAccount.get(accountId) || 0) + tax);
       }
     });
 
-    // 消費税額の計算
-    const salesTax = Math.round(taxableSales * taxRateForCalc);
-    let purchaseTax = 0;
     let taxPayable = 0;
 
     if (taxMethod === "general") {
       // 一般課税: 売上税額 - 仕入税額
-      purchaseTax = Math.round(taxablePurchases * taxRateForCalc);
       taxPayable = salesTax - purchaseTax;
     } else {
       // 簡易課税: 売上税額 × (1 - みなし仕入率)
@@ -124,7 +127,7 @@ export default function ConsumptionTax() {
       .map(([id, amount]) => ({
         account: accountMap.get(id)!,
         amount,
-        tax: Math.round(amount * taxRateForCalc),
+        tax: salesTaxByAccount.get(id) || 0,
       }))
       .filter((i) => i.account)
       .sort((a, b) => b.amount - a.amount);
@@ -133,7 +136,7 @@ export default function ConsumptionTax() {
       .map(([id, amount]) => ({
         account: accountMap.get(id)!,
         amount,
-        tax: Math.round(amount * taxRateForCalc),
+        tax: purchaseTaxByAccount.get(id) || 0,
       }))
       .filter((i) => i.account)
       .sort((a, b) => b.amount - a.amount);
@@ -146,8 +149,9 @@ export default function ConsumptionTax() {
       taxPayable,
       salesItems,
       purchaseItems,
+      unclassifiedCount,
     };
-  }, [yearJournals, accountMap, defaultTaxRate, taxMethod, simplifiedType]);
+  }, [yearJournals, accountMap, taxMethod, simplifiedType, defaultTaxRate]);
 
   function handleExport() {
     const lines: string[] = [
@@ -247,10 +251,11 @@ export default function ConsumptionTax() {
           <div className="flex items-start gap-2">
             <Info className="h-4 w-4 text-amber-600 mt-0.5 shrink-0" />
             <p className="text-[12px] text-muted-foreground">
-              この集計は概算です。実際の消費税申告では、非課税取引・不課税取引の区分、
-              課税売上割合の計算など、より詳細な判定が必要です。
+              この画面は仕訳明細の消費税区分を集計した検算用データです。実際の消費税申告では、
+              非課税取引・不課税取引、課税売上割合、インボイス保存要件などの確認が必要です。
               年間課税売上高が1,000万円以下の場合は免税事業者となり、消費税の納付義務はありません
               （インボイス登録事業者を除く）。
+              {taxData.unclassifiedCount > 0 && ` 未分類の仕訳が${taxData.unclassifiedCount}件あります。申告前に全件分類してください。`}
             </p>
           </div>
         </CardContent>

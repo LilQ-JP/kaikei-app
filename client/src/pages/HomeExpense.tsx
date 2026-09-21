@@ -35,6 +35,7 @@ import { formatYen, CATEGORY_LABELS } from "@/lib/utils";
 import { Plus, Trash2, Calculator, Save, Info } from "lucide-react";
 import { useEffect, useState, useMemo } from "react";
 import { toast } from "sonner";
+import { loadAppJson, saveAppJson } from "@/lib/app-storage";
 
 interface HomeExpenseRule {
   id: string;
@@ -45,23 +46,10 @@ interface HomeExpenseRule {
 
 const STORAGE_KEY = "kaikei-home-expense-rules";
 
-function loadRules(): HomeExpenseRule[] {
-  try {
-    const data = localStorage.getItem(STORAGE_KEY);
-    return data ? JSON.parse(data) : [];
-  } catch {
-    return [];
-  }
-}
-
-function saveRules(rules: HomeExpenseRule[]) {
-  localStorage.setItem(STORAGE_KEY, JSON.stringify(rules));
-}
-
 export default function HomeExpense() {
   const [accounts, setAccounts] = useState<AccountItem[]>([]);
   const [journals, setJournals] = useState<JournalEntry[]>([]);
-  const [rules, setRules] = useState<HomeExpenseRule[]>(loadRules());
+  const [rules, setRules] = useState<HomeExpenseRule[]>([]);
   const [loading, setLoading] = useState(true);
   const [year, setYear] = useState(new Date().getFullYear());
   const [showAddDialog, setShowAddDialog] = useState(false);
@@ -72,6 +60,10 @@ export default function HomeExpense() {
   });
   const [showJournalDialog, setShowJournalDialog] = useState(false);
   const [saving, setSaving] = useState(false);
+
+  useEffect(() => {
+    loadAppJson<HomeExpenseRule[]>("homeExpenseRules", STORAGE_KEY, []).then(setRules).catch(() => toast.error("家事按分ルールを読み込めません"));
+  }, []);
 
   useEffect(() => {
     Promise.all([getAllAccounts(), getAllJournals()]).then(([accs, j]) => {
@@ -136,7 +128,7 @@ export default function HomeExpense() {
     };
     const updated = [...rules, rule];
     setRules(updated);
-    saveRules(updated);
+    void saveAppJson("homeExpenseRules", STORAGE_KEY, updated);
     setShowAddDialog(false);
     setNewRule({ accountId: "", businessRatio: 50, description: "" });
     toast.success("按分ルールを追加しました");
@@ -145,13 +137,13 @@ export default function HomeExpense() {
   function updateRuleRatio(id: string, ratio: number) {
     const updated = rules.map((r) => (r.id === id ? { ...r, businessRatio: Math.max(0, Math.min(100, ratio)) } : r));
     setRules(updated);
-    saveRules(updated);
+    void saveAppJson("homeExpenseRules", STORAGE_KEY, updated);
   }
 
   function deleteRule(id: string) {
     const updated = rules.filter((r) => r.id !== id);
     setRules(updated);
-    saveRules(updated);
+    void saveAppJson("homeExpenseRules", STORAGE_KEY, updated);
     toast.success("按分ルールを削除しました");
   }
 
@@ -166,9 +158,12 @@ export default function HomeExpense() {
         return;
       }
 
+      const existingJournals = await getAllJournals();
       let count = 0;
       for (const calc of calculations) {
         if (calc.personalAmount <= 0) continue;
+        const sourceKey = `家事按分:${year}:${calc.rule.id}`;
+        if (existingJournals.some((journal) => journal.memo?.includes(sourceKey))) continue;
         const journal: JournalEntry = {
           id: crypto.randomUUID(),
           date: `${year}-12-31`,
@@ -176,7 +171,7 @@ export default function HomeExpense() {
           creditAccountId: calc.rule.accountId,
           amount: calc.personalAmount,
           description: `家事按分 ${calc.accountName} 個人使用分 ${100 - calc.rule.businessRatio}%`,
-          memo: `家事按分自動仕訳 ${year}年度`,
+          memo: `家事按分自動仕訳 ${year}年度 ${sourceKey}`,
           createdAt: now,
           updatedAt: now,
         };

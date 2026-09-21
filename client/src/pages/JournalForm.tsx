@@ -35,6 +35,7 @@ import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import {
   getAllAccounts,
   getAllJournals,
+  putJournalsAtomic,
   putJournal,
   putReceipt,
   getReceipt,
@@ -77,6 +78,8 @@ interface SimpleEntry {
   description: string;
   memo: string;
   paymentMethod: string;
+  taxCategory: NonNullable<JournalEntry["taxCategory"]>;
+  taxRate: number;
   receiptFile?: File;
   receiptPreview?: string;
   existingReceiptId?: string;
@@ -111,6 +114,8 @@ function createEmptySimple(): SimpleEntry {
     description: "",
     memo: "",
     paymentMethod: "",
+    taxCategory: "out-of-scope",
+    taxRate: 10,
   };
 }
 
@@ -189,6 +194,8 @@ export default function JournalForm() {
               description: existing.description,
               memo: existing.memo || "",
               paymentMethod: existing.paymentMethod || "",
+              taxCategory: existing.taxCategory || "out-of-scope",
+              taxRate: existing.taxRate ?? 10,
               existingReceiptId: existing.receiptId,
             },
           ]);
@@ -420,6 +427,9 @@ export default function JournalForm() {
             description: e.description,
             memo: e.memo || undefined,
             paymentMethod: e.paymentMethod || undefined,
+            taxCategory: e.taxCategory,
+            taxRate: e.taxRate,
+            taxIncluded: true,
             receiptId,
             createdAt: isEdit ? (pastJournals.find((j) => j.id === journalId)?.createdAt || now) : now,
             updatedAt: now,
@@ -476,6 +486,7 @@ export default function JournalForm() {
         // Clone lines to avoid mutation
         const dLines = debitLines.map((l) => ({ ...l }));
         const cLines = creditLines.map((l) => ({ ...l }));
+        const journalsToSave: JournalEntry[] = [];
         for (const dl of dLines) {
           for (const cl of cLines) {
             const amount = Math.min(Number(dl.amount), Number(cl.amount));
@@ -494,11 +505,12 @@ export default function JournalForm() {
               createdAt: now,
               updatedAt: now,
             };
-            await putJournal(journal);
+            journalsToSave.push(journal);
             dl.amount = String(Number(dl.amount) - amount);
             cl.amount = String(Number(cl.amount) - amount);
           }
         }
+        await putJournalsAtomic(journalsToSave);
         toast.success("複合仕訳を保存しました");
       }
 
@@ -871,6 +883,25 @@ export default function JournalForm() {
                     <div>
                       <Label className="text-[12px] font-semibold">金額（円）</Label>
                       <Input type="number" placeholder="0" value={entry.amount} onChange={(e) => updateEntry(index, "amount", e.target.value)} className="mt-1 text-[13px] font-mono" />
+                    </div>
+                  </div>
+
+                  <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
+                    <div>
+                      <Label className="text-[12px] font-semibold">消費税区分</Label>
+                      <select value={entry.taxCategory} onChange={(e) => updateEntry(index, "taxCategory", e.target.value)} className="mt-1 h-9 w-full rounded-md border bg-background px-3 text-[13px]">
+                        <option value="out-of-scope">対象外・未設定</option>
+                        <option value="taxable-sales">課税売上10%</option>
+                        <option value="taxable-sales-reduced">課税売上8%</option>
+                        <option value="taxable-purchase">課税仕入10%</option>
+                        <option value="taxable-purchase-reduced">課税仕入8%</option>
+                        <option value="exempt">非課税</option>
+                        <option value="non-taxable">不課税・免税</option>
+                      </select>
+                    </div>
+                    <div>
+                      <Label className="text-[12px] font-semibold">税率（%）</Label>
+                      <Input type="number" min="0" max="100" value={entry.taxRate} onChange={(e) => updateEntry(index, "taxRate", e.target.value)} className="mt-1 text-[13px] font-mono" />
                     </div>
                   </div>
 

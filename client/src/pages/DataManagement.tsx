@@ -34,10 +34,13 @@ import {
   putSettings,
   clearAllData,
 } from "@/lib/db";
+import { loadAppJson, saveAppJson } from "@/lib/app-storage";
 import { downloadFile } from "@/lib/utils";
 import { Download, Upload, Trash2, Database, HardDrive } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 import { toast } from "sonner";
+
+const remoteMode = import.meta.env.PROD || import.meta.env.VITE_REMOTE_DB === "true";
 
 export default function DataManagement() {
   const [stats, setStats] = useState({ accounts: 0, journals: 0, invoices: 0, receipts: 0 });
@@ -74,9 +77,13 @@ export default function DataManagement() {
       getSettings(),
     ]);
 
+    const [fixedAssets, homeExpenseRules] = await Promise.all([
+      loadAppJson("fixedAssets", "kaikei-fixed-assets", []),
+      loadAppJson("homeExpenseRules", "kaikei-home-expense-rules", []),
+    ]);
     const localStorageData = {
-      fixedAssets: localStorage.getItem("kaikei-fixed-assets"),
-      homeExpenseRules: localStorage.getItem("kaikei-home-expense-rules"),
+      fixedAssets: JSON.stringify(fixedAssets),
+      homeExpenseRules: JSON.stringify(homeExpenseRules),
     };
 
     const data = {
@@ -143,10 +150,11 @@ export default function DataManagement() {
       }
       if (data.localStorage) {
         for (const [key, value] of Object.entries(data.localStorage)) {
-          if (typeof value === "string") localStorage.setItem(
-            key === "fixedAssets" ? "kaikei-fixed-assets" : "kaikei-home-expense-rules",
-            value,
-          );
+          if (typeof value === "string") {
+            const collection = key === "fixedAssets" ? "fixedAssets" : "homeExpenseRules";
+            const storageKey = key === "fixedAssets" ? "kaikei-fixed-assets" : "kaikei-home-expense-rules";
+            try { await saveAppJson(collection, storageKey, JSON.parse(value)); } catch { localStorage.setItem(storageKey, value); }
+          }
         }
       }
 
@@ -163,6 +171,14 @@ export default function DataManagement() {
     await clearAllData();
     toast.success("すべてのデータを削除しました");
     window.location.reload();
+  }
+
+  async function handleServerBackup() {
+    if (!remoteMode) { toast.info("サーバー接続時のみ暗号化バックアップを作成できます"); return; }
+    const response = await fetch("/api/v1/backups", { method: "POST", credentials: "include" });
+    if (!response.ok) { toast.error("暗号化バックアップに失敗しました"); return; }
+    const result = await response.json();
+    toast.success(`暗号化バックアップを作成しました（${result.recordCount}件）`);
   }
 
   if (loading) {
@@ -204,13 +220,22 @@ export default function DataManagement() {
           </div>
           <div className="mt-3 flex items-center gap-2 text-[12px] text-muted-foreground">
             <HardDrive className="h-3.5 w-3.5" />
-            合計 {totalRecords} レコード（ブラウザのIndexedDBに保存）
+            合計 {totalRecords} レコード（{remoteMode ? "LenovoサーバーのSQLiteに保存" : "このブラウザのIndexedDBに保存"}）
           </div>
         </CardContent>
       </Card>
 
       {/* Actions */}
       <div className="space-y-3">
+        <Card className="border shadow-sm">
+          <CardContent className="p-4 flex items-center justify-between gap-4">
+            <div>
+              <h3 className="text-[14px] font-bold">サーバー暗号化バックアップ</h3>
+              <p className="text-[12px] text-muted-foreground mt-0.5">SQLiteのデータと監査記録をAES-256-GCMで保存します</p>
+            </div>
+            <Button variant="outline" size="sm" onClick={handleServerBackup}><HardDrive className="h-4 w-4 mr-1" />作成</Button>
+          </CardContent>
+        </Card>
         {/* Export */}
         <Card className="border shadow-sm">
           <CardContent className="p-4">

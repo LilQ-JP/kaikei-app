@@ -15,6 +15,7 @@ import { formatYen, downloadFile } from "@/lib/utils";
 import { Download } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
 import { toast } from "sonner";
+import { calculateProfitLoss } from "@shared/accounting";
 
 export default function ProfitLoss() {
   const [journals, setJournals] = useState<JournalEntry[]>([]);
@@ -37,45 +38,9 @@ export default function ProfitLoss() {
     [journals, year]
   );
 
-  const accountMap = useMemo(() => {
-    const map = new Map<string, AccountItem>();
-    accounts.forEach((a) => map.set(a.id, a));
-    return map;
-  }, [accounts]);
-
   const plData = useMemo(() => {
-    // Aggregate amounts by account
-    const incomeAccounts = new Map<string, number>();
-    const expenseAccounts = new Map<string, number>();
-
-    yearJournals.forEach((j) => {
-      const creditAcc = accountMap.get(j.creditAccountId);
-      const debitAcc = accountMap.get(j.debitAccountId);
-
-      if (creditAcc?.category === "income") {
-        incomeAccounts.set(creditAcc.id, (incomeAccounts.get(creditAcc.id) || 0) + j.amount);
-      }
-      if (debitAcc?.category === "expense") {
-        expenseAccounts.set(debitAcc.id, (expenseAccounts.get(debitAcc.id) || 0) + j.amount);
-      }
-    });
-
-    const incomeItems = Array.from(incomeAccounts.entries())
-      .map(([id, amount]) => ({ account: accountMap.get(id)!, amount }))
-      .filter((i) => i.account)
-      .sort((a, b) => a.account.code.localeCompare(b.account.code));
-
-    const expenseItems = Array.from(expenseAccounts.entries())
-      .map(([id, amount]) => ({ account: accountMap.get(id)!, amount }))
-      .filter((i) => i.account)
-      .sort((a, b) => a.account.code.localeCompare(b.account.code));
-
-    const totalIncome = incomeItems.reduce((sum, i) => sum + i.amount, 0);
-    const totalExpense = expenseItems.reduce((sum, i) => sum + i.amount, 0);
-    const netIncome = totalIncome - totalExpense;
-
-    return { incomeItems, expenseItems, totalIncome, totalExpense, netIncome };
-  }, [yearJournals, accountMap]);
+    return calculateProfitLoss(accounts, yearJournals);
+  }, [yearJournals, accounts]);
 
   function handleExport() {
     const lines: string[] = [`損益計算書 ${year}年度`, ""];

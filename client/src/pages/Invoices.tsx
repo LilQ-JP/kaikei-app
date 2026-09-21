@@ -118,7 +118,16 @@ export default function Invoices() {
   }
 
   const subtotal = items.reduce((sum, item) => sum + item.amount, 0);
-  const taxAmount = Math.floor(subtotal * (taxRate / 100));
+  const taxBreakdown = Array.from(items.reduce((groups, item) => {
+    const rate = Number(item.taxRate ?? taxRate);
+    groups.set(rate, (groups.get(rate) || 0) + item.amount);
+    return groups;
+  }, new Map<number, number>()).entries()).sort(([a], [b]) => a - b).map(([rate, taxableAmount]) => ({
+    taxRate: rate,
+    taxableAmount,
+    taxAmount: Math.floor(taxableAmount * (rate / 100)),
+  }));
+  const taxAmount = taxBreakdown.reduce((sum, group) => sum + group.taxAmount, 0);
   const total = subtotal + taxAmount;
 
   async function handleSave() {
@@ -144,6 +153,7 @@ export default function Invoices() {
       taxRate,
       taxAmount,
       total,
+      taxBreakdown,
       status: "draft",
       notes,
       bankInfo,
@@ -276,7 +286,7 @@ export default function Invoices() {
                 <div className="space-y-2">
                   {items.map((item, i) => (
                     <div key={i} className="grid grid-cols-12 gap-2 items-end">
-                      <div className="col-span-5">
+                      <div className="col-span-4">
                         {i === 0 && (
                           <Label className="text-[11px] text-muted-foreground">品名</Label>
                         )}
@@ -318,6 +328,18 @@ export default function Invoices() {
                         </div>
                       </div>
                       <div className="col-span-1">
+                        {i === 0 && <Label className="text-[11px] text-muted-foreground">税率</Label>}
+                        <select
+                          value={item.taxRate ?? 10}
+                          onChange={(e) => updateItem(i, "taxRate", Number(e.target.value))}
+                          className="mt-1 h-9 w-full rounded-md border bg-background px-1 text-[12px]"
+                        >
+                          <option value={10}>10%</option>
+                          <option value={8}>8%</option>
+                          <option value={0}>非課税</option>
+                        </select>
+                      </div>
+                      <div className="col-span-1">
                         {items.length > 1 && (
                           <Button
                             variant="ghost"
@@ -339,10 +361,11 @@ export default function Invoices() {
                 <div className="text-[13px]">
                   小計: <span className="font-mono font-bold">{formatYen(subtotal)}</span>
                 </div>
-                <div className="text-[13px]">
-                  消費税({taxRate}%):{" "}
-                  <span className="font-mono font-bold">{formatYen(taxAmount)}</span>
-                </div>
+                {taxBreakdown.map((group) => (
+                  <div key={group.taxRate} className="text-[13px]">
+                    消費税({group.taxRate}%): <span className="font-mono font-bold">{formatYen(group.taxAmount)}</span>
+                  </div>
+                ))}
                 <div className="text-[16px] font-bold">
                   合計: <span className="font-mono">{formatYen(total)}</span>
                 </div>

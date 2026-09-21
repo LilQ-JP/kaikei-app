@@ -15,6 +15,7 @@ import { formatYen, CATEGORY_LABELS, downloadFile } from "@/lib/utils";
 import { Download } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
 import { toast } from "sonner";
+import { summarizeBalances } from "@shared/accounting";
 
 interface TrialBalanceRow {
   accountId: string;
@@ -49,33 +50,23 @@ export default function TrialBalance() {
   );
 
   const rows = useMemo(() => {
-    const map = new Map<string, { debit: number; credit: number }>();
-    accounts.forEach((a) => map.set(a.id, { debit: 0, credit: 0 }));
-
-    yearJournals.forEach((j) => {
-      const d = map.get(j.debitAccountId);
-      const c = map.get(j.creditAccountId);
-      if (d) d.debit += j.amount;
-      if (c) c.credit += j.amount;
-    });
+    const balances = summarizeBalances(accounts, yearJournals);
 
     const result: TrialBalanceRow[] = [];
-    accounts
+    [...accounts]
       .sort((a, b) => a.code.localeCompare(b.code))
       .forEach((acc) => {
-        const data = map.get(acc.id);
-        if (!data || (data.debit === 0 && data.credit === 0)) return;
-        const isDebitNormal = acc.category === "asset" || acc.category === "expense";
-        const balance = data.debit - data.credit;
+        const data = balances.get(acc.id);
+        if (!data || (data.debitTotal === 0 && data.creditTotal === 0)) return;
         result.push({
           accountId: acc.id,
           code: acc.code,
           name: acc.name,
           category: acc.category,
-          debitTotal: data.debit,
-          creditTotal: data.credit,
-          debitBalance: isDebitNormal && balance > 0 ? balance : !isDebitNormal && balance < 0 ? -balance : isDebitNormal ? balance : 0,
-          creditBalance: !isDebitNormal && balance > 0 ? balance : isDebitNormal && balance < 0 ? -balance : !isDebitNormal ? balance : 0,
+          debitTotal: data.debitTotal,
+          creditTotal: data.creditTotal,
+          debitBalance: data.debitBalance,
+          creditBalance: data.creditBalance,
         });
       });
 

@@ -25,6 +25,7 @@ import { formatYen, downloadFile } from "@/lib/utils";
 import { Download, FileText, Info } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
 import { toast } from "sonner";
+import { summarizeBalances } from "@shared/accounting";
 import { Link } from "wouter";
 
 // 青色申告決算書の経費科目マッピング
@@ -79,12 +80,6 @@ export default function TaxFiling() {
     [journals, year]
   );
 
-  const accountMap = useMemo(() => {
-    const map = new Map<string, AccountItem>();
-    accounts.forEach((a) => map.set(a.id, a));
-    return map;
-  }, [accounts]);
-
   const codeToAccountId = useMemo(() => {
     const map = new Map<string, string>();
     accounts.forEach((a) => map.set(a.code, a.id));
@@ -92,37 +87,31 @@ export default function TaxFiling() {
   }, [accounts]);
 
   const taxData = useMemo(() => {
+    const balances = summarizeBalances(accounts, yearJournals);
     // Revenue
     let salesRevenue = 0;
     let otherIncome = 0;
 
-    yearJournals.forEach((j) => {
-      const creditAcc = accountMap.get(j.creditAccountId);
-      if (creditAcc?.category === "income") {
-        if (creditAcc.code === "400") {
-          salesRevenue += j.amount;
-        } else {
-          otherIncome += j.amount;
-        }
-      }
+    accounts.forEach((account) => {
+      if (account.category !== "income") return;
+      const amount = balances.get(account.id)?.creditBalance || 0;
+      if (account.code === "400") salesRevenue += amount;
+      else otherIncome += amount;
     });
 
     // Cost of goods sold
-    let cogs = 0;
-    yearJournals.forEach((j) => {
-      const debitAcc = accountMap.get(j.debitAccountId);
-      if (debitAcc?.code === "500") cogs += j.amount;
-    });
+    const cogs = accounts
+      .filter((account) => account.code === "500")
+      .reduce((sum, account) => sum + (balances.get(account.id)?.debitBalance || 0), 0);
 
     const grossProfit = salesRevenue - cogs;
 
     // Expenses by category
     const expenseByCode = new Map<string, number>();
-    yearJournals.forEach((j) => {
-      const debitAcc = accountMap.get(j.debitAccountId);
-      if (debitAcc?.category === "expense" && debitAcc.code !== "500") {
-        expenseByCode.set(debitAcc.code, (expenseByCode.get(debitAcc.code) || 0) + j.amount);
-      }
+    accounts.forEach((account) => {
+      if (account.category !== "expense" || account.code === "500") return;
+      const amount = balances.get(account.id)?.debitBalance || 0;
+      if (amount > 0) expenseByCode.set(account.code, amount);
     });
 
     const expenseItems = BLUE_FORM_EXPENSE_ITEMS.map((item) => {
@@ -159,7 +148,7 @@ export default function TaxFiling() {
       blueDeduction: deductionAmount,
       taxableIncome,
     };
-  }, [yearJournals, accountMap, filingType, blueDeduction]);
+  }, [yearJournals, accounts, filingType, blueDeduction]);
 
   function handleExport() {
     const lines: string[] = [];

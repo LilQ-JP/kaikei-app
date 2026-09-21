@@ -19,6 +19,7 @@ function formatDate(dateStr: string): string {
  * 請求書のHTMLを生成
  */
 function generateInvoiceHTML(invoice: Invoice, profile?: BusinessProfile): string {
+  const taxBreakdown = invoice.taxBreakdown?.length ? invoice.taxBreakdown : [{ taxRate: invoice.taxRate, taxableAmount: invoice.subtotal, taxAmount: invoice.taxAmount }];
   const itemRows = invoice.items
     .map(
       (item, i) => `
@@ -37,7 +38,6 @@ function generateInvoiceHTML(invoice: Invoice, profile?: BusinessProfile): strin
 <head>
   <meta charset="UTF-8">
   <title>請求書 ${escapeHtml(invoice.invoiceNumber)}</title>
-  <link href="https://fonts.googleapis.com/css2?family=Noto+Sans+JP:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet">
   <style>
     * { margin:0; padding:0; box-sizing:border-box; }
     body {
@@ -140,10 +140,10 @@ function generateInvoiceHTML(invoice: Invoice, profile?: BusinessProfile): strin
           <span style="color:#6e6e73;">小計</span>
           <span class="mono" style="font-weight:600;">${formatYen(invoice.subtotal)}</span>
         </div>
-        <div style="display:flex;justify-content:space-between;padding:6px 0;font-size:13px;border-bottom:1px solid #e5e5e5;">
-          <span style="color:#6e6e73;">消費税 (${invoice.taxRate}%)</span>
-          <span class="mono" style="font-weight:600;">${formatYen(invoice.taxAmount)}</span>
-        </div>
+        ${taxBreakdown.map((group) => `<div style="display:flex;justify-content:space-between;padding:6px 0;font-size:13px;border-bottom:1px solid #e5e5e5;">
+          <span style="color:#6e6e73;">消費税 (${group.taxRate}%)</span>
+          <span class="mono" style="font-weight:600;">${formatYen(group.taxAmount)}</span>
+        </div>`).join("")}
         <div style="display:flex;justify-content:space-between;padding:10px 0;font-size:16px;font-weight:700;">
           <span>合計</span>
           <span class="mono">${formatYen(invoice.total)}</span>

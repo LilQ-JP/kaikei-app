@@ -8,6 +8,24 @@
 
 import { openDB, type DBSchema, type IDBPDatabase } from "idb";
 
+const USE_REMOTE_DB = import.meta.env.PROD || import.meta.env.VITE_REMOTE_DB === "true";
+
+async function remoteRequest<T>(path: string, init?: RequestInit): Promise<T> {
+  const response = await fetch(`/api/v1${path}`, {
+    ...init,
+    credentials: "same-origin",
+    headers: { "Content-Type": "application/json", ...(init?.headers || {}) },
+  });
+  if (!response.ok) {
+    const payload = await response.json().catch(() => null) as { error?: string } | null;
+    throw new Error(payload?.error || `APIエラー (${response.status})`);
+  }
+  if (response.status === 204) return undefined as T;
+  return response.json() as Promise<T>;
+}
+
+const remoteCollection = (collection: string) => `/records/${collection}`;
+
 /* ─── Data Models ─── */
 
 export interface AccountItem {
@@ -17,6 +35,7 @@ export interface AccountItem {
   category: "asset" | "liability" | "equity" | "income" | "expense";
   subcategory: string;
   isDefault: boolean;
+  normalBalance?: "debit" | "credit";
   taxRate?: number;
   description?: string;
   createdAt: string;
@@ -32,6 +51,12 @@ export interface JournalEntry {
   memo?: string;
   receiptId?: string;
   paymentMethod?: string; // カード名・決済手段（例: 楽天カード, PayPay, 現金）
+  taxCategory?: "taxable-sales" | "taxable-purchase" | "taxable-sales-reduced" | "taxable-purchase-reduced" | "exempt" | "non-taxable" | "out-of-scope";
+  taxRate?: number;
+  taxIncluded?: boolean;
+  vendorId?: string;
+  sourceDocumentId?: string;
+  sourceKey?: string;
   tags?: string[];
   createdAt: string;
   updatedAt: string;
@@ -50,6 +75,7 @@ export interface Invoice {
   taxRate: number;
   taxAmount: number;
   total: number;
+  taxBreakdown?: { taxRate: number; taxableAmount: number; taxAmount: number }[];
   status: "draft" | "sent" | "paid" | "overdue";
   notes?: string;
   bankInfo?: string;
@@ -192,6 +218,7 @@ export const DEFAULT_ACCOUNTS: Omit<AccountItem, "id" | "createdAt">[] = [
   { code: "154", name: "車両運搬具", category: "asset", subcategory: "固定資産", isDefault: true },
   { code: "156", name: "工具器具備品", category: "asset", subcategory: "固定資産", isDefault: true },
   { code: "158", name: "ソフトウェア", category: "asset", subcategory: "固定資産", isDefault: true },
+  { code: "159", name: "減価償却累計額", category: "asset", subcategory: "固定資産評価勘定", normalBalance: "credit", isDefault: true },
   { code: "170", name: "事業主貸", category: "asset", subcategory: "事業主勘定", isDefault: true },
 
   // 負債 (Liabilities)
@@ -288,20 +315,29 @@ export async function getDB(): Promise<IDBPDatabase<KaikeiDB>> {
 /* ─── Initialization ─── */
 
 export async function initializeDB(): Promise<void> {
+  if (USE_REMOTE_DB) {
+    const accounts = await remoteRequest<AccountItem[]>(remoteCollection("accounts"));
+    const now = new Date().toISOString();
+    const missing = DEFAULT_ACCOUNTS.filter((account) => !accounts.some((existing) => existing.code === account.code));
+    if (missing.length > 0) {
+      await Promise.all(missing.map((account) => {
+        const id = crypto.randomUUID();
+        return remoteRequest<void>(`${remoteCollection("accounts")}/${id}`, { method: "PUT", body: JSON.stringify({ ...account, id, createdAt: now }) });
+      }));
+    }
+    const settings = await remoteRequest<AppSettings[]>(remoteCollection("settings"));
+    if (settings.length === 0) await remoteRequest<void>(`${remoteCollection("settings")}/default`, { method: "PUT", body: JSON.stringify({ id: "default", currentFiscalYear: new Date().getFullYear(), theme: "light", currency: "JPY", dateFormat: "YYYY-MM-DD" }) });
+    return;
+  }
   const db = await getDB();
 
-  // Check if accounts already exist
-  const count = await db.count("accounts");
-  if (count === 0) {
+  // Add newly introduced default accounts without overwriting user data.
+  const existingAccounts = await db.getAll("accounts");
+  const missing = DEFAULT_ACCOUNTS.filter((account) => !existingAccounts.some((existing) => existing.code === account.code));
+  if (missing.length > 0) {
     const tx = db.transaction("accounts", "readwrite");
     const now = new Date().toISOString();
-    for (const account of DEFAULT_ACCOUNTS) {
-      await tx.store.put({
-        ...account,
-        id: crypto.randomUUID(),
-        createdAt: now,
-      });
-    }
+    for (const account of missing) await tx.store.put({ ...account, id: crypto.randomUUID(), createdAt: now });
     await tx.done;
   }
 
@@ -322,38 +358,45 @@ export async function initializeDB(): Promise<void> {
 
 // Accounts
 export async function getAllAccounts(): Promise<AccountItem[]> {
+  if (USE_REMOTE_DB) return remoteRequest<AccountItem[]>(remoteCollection("accounts"));
   const db = await getDB();
   return db.getAll("accounts");
 }
 
 export async function getAccountsByCategory(category: AccountItem["category"]): Promise<AccountItem[]> {
+  if (USE_REMOTE_DB) return (await getAllAccounts()).filter((account) => account.category === category);
   const db = await getDB();
   return db.getAllFromIndex("accounts", "by-category", category);
 }
 
 export async function getAccount(id: string): Promise<AccountItem | undefined> {
+  if (USE_REMOTE_DB) return remoteRequest<AccountItem | undefined>(`${remoteCollection("accounts")}/${id}`).catch((error) => error.message.includes("APIエラー (404)") ? undefined : Promise.reject(error));
   const db = await getDB();
   return db.get("accounts", id);
 }
 
 export async function putAccount(account: AccountItem): Promise<void> {
+  if (USE_REMOTE_DB) return remoteRequest<void>(`${remoteCollection("accounts")}/${account.id}`, { method: "PUT", body: JSON.stringify(account) });
   const db = await getDB();
   await db.put("accounts", account);
 }
 
 export async function deleteAccount(id: string): Promise<void> {
+  if (USE_REMOTE_DB) return remoteRequest<void>(`${remoteCollection("accounts")}/${id}`, { method: "DELETE" });
   const db = await getDB();
   await db.delete("accounts", id);
 }
 
 // Journals
 export async function getAllJournals(): Promise<JournalEntry[]> {
+  if (USE_REMOTE_DB) return remoteRequest<JournalEntry[]>(remoteCollection("journals"));
   const db = await getDB();
   const all = await db.getAll("journals");
   return all.sort((a, b) => b.date.localeCompare(a.date) || b.createdAt.localeCompare(a.createdAt));
 }
 
 export async function getJournalsByDateRange(start: string, end: string): Promise<JournalEntry[]> {
+  if (USE_REMOTE_DB) return (await getAllJournals()).filter((journal) => journal.date >= start && journal.date <= end).sort((a, b) => a.date.localeCompare(b.date) || a.createdAt.localeCompare(b.createdAt));
   const db = await getDB();
   const range = IDBKeyRange.bound(start, end);
   const results = await db.getAllFromIndex("journals", "by-date", range);
@@ -361,83 +404,109 @@ export async function getJournalsByDateRange(start: string, end: string): Promis
 }
 
 export async function putJournal(entry: JournalEntry): Promise<void> {
+  if (USE_REMOTE_DB) return remoteRequest<void>(`${remoteCollection("journals")}/${entry.id}`, { method: "PUT", body: JSON.stringify(entry) });
   const db = await getDB();
   await db.put("journals", entry);
 }
 
+export async function putJournalsAtomic(entries: JournalEntry[]): Promise<void> {
+  if (USE_REMOTE_DB) {
+    await remoteRequest<void>("/records/batch", { method: "POST", body: JSON.stringify({ collection: "journals", records: entries.map((data) => ({ id: data.id, data })) }) });
+    return;
+  }
+  const db = await getDB();
+  const tx = db.transaction("journals", "readwrite");
+  for (const entry of entries) await tx.store.put(entry);
+  await tx.done;
+}
+
 export async function deleteJournal(id: string): Promise<void> {
+  if (USE_REMOTE_DB) return remoteRequest<void>(`${remoteCollection("journals")}/${id}`, { method: "DELETE" });
   const db = await getDB();
   await db.delete("journals", id);
 }
 
 // Invoices
 export async function getAllInvoices(): Promise<Invoice[]> {
+  if (USE_REMOTE_DB) return remoteRequest<Invoice[]>(remoteCollection("invoices"));
   const db = await getDB();
   const all = await db.getAll("invoices");
   return all.sort((a, b) => b.issueDate.localeCompare(a.issueDate));
 }
 
 export async function getInvoice(id: string): Promise<Invoice | undefined> {
+  if (USE_REMOTE_DB) return remoteRequest<Invoice | undefined>(`${remoteCollection("invoices")}/${id}`).catch((error) => error.message.includes("APIエラー (404)") ? undefined : Promise.reject(error));
   const db = await getDB();
   return db.get("invoices", id);
 }
 
 export async function putInvoice(invoice: Invoice): Promise<void> {
+  if (USE_REMOTE_DB) return remoteRequest<void>(`${remoteCollection("invoices")}/${invoice.id}`, { method: "PUT", body: JSON.stringify(invoice) });
   const db = await getDB();
   await db.put("invoices", invoice);
 }
 
 export async function deleteInvoice(id: string): Promise<void> {
+  if (USE_REMOTE_DB) return remoteRequest<void>(`${remoteCollection("invoices")}/${id}`, { method: "DELETE" });
   const db = await getDB();
   await db.delete("invoices", id);
 }
 
 // Receipts
 export async function getAllReceipts(): Promise<Receipt[]> {
+  if (USE_REMOTE_DB) return remoteRequest<Receipt[]>(remoteCollection("receipts"));
   const db = await getDB();
   const all = await db.getAll("receipts");
   return all.sort((a, b) => b.date.localeCompare(a.date));
 }
 
 export async function getReceipt(id: string): Promise<Receipt | undefined> {
+  if (USE_REMOTE_DB) return remoteRequest<Receipt | undefined>(`${remoteCollection("receipts")}/${id}`).catch((error) => error.message.includes("APIエラー (404)") ? undefined : Promise.reject(error));
   const db = await getDB();
   return db.get("receipts", id);
 }
 
 export async function getReceiptByJournalId(journalId: string): Promise<Receipt | undefined> {
+  if (USE_REMOTE_DB) return (await getAllReceipts()).find((receipt) => receipt.journalEntryId === journalId);
   const db = await getDB();
   const all = await db.getAllFromIndex("receipts", "by-journal", journalId);
   return all[0];
 }
 
 export async function putReceipt(receipt: Receipt): Promise<void> {
+  if (USE_REMOTE_DB) return remoteRequest<void>(`${remoteCollection("receipts")}/${receipt.id}`, { method: "PUT", body: JSON.stringify(receipt) });
   const db = await getDB();
   await db.put("receipts", receipt);
 }
 
 export async function deleteReceipt(id: string): Promise<void> {
+  if (USE_REMOTE_DB) return remoteRequest<void>(`${remoteCollection("receipts")}/${id}`, { method: "DELETE" });
   const db = await getDB();
   await db.delete("receipts", id);
 }
 
 // Profile
 export async function getProfile(): Promise<BusinessProfile | undefined> {
+  if (USE_REMOTE_DB) return remoteRequest<BusinessProfile[]>(remoteCollection("profile")).then((items) => items[0]);
   const db = await getDB();
   return db.get("profile", "default");
 }
 
 export async function putProfile(profile: BusinessProfile): Promise<void> {
+  if (USE_REMOTE_DB) return remoteRequest<void>(`${remoteCollection("profile")}/${profile.id || "default"}`, { method: "PUT", body: JSON.stringify(profile) });
   const db = await getDB();
   await db.put("profile", { ...profile, id: "default" });
 }
 
 // Settings
 export async function getSettings(): Promise<AppSettings | undefined> {
+  if (USE_REMOTE_DB) return remoteRequest<AppSettings[]>(remoteCollection("settings")).then((items) => items[0]);
   const db = await getDB();
   return db.get("settings", "default");
 }
 
 export async function putSettings(settings: AppSettings): Promise<void> {
+  if (USE_REMOTE_DB) return remoteRequest<void>(`${remoteCollection("settings")}/default`, { method: "PUT", body: JSON.stringify(settings) });
   const db = await getDB();
   await db.put("settings", { ...settings, id: "default" });
 }
@@ -520,28 +589,38 @@ export async function importAllData(jsonString: string): Promise<void> {
 
 // Vendors
 export async function getAllVendors(): Promise<Vendor[]> {
+  if (USE_REMOTE_DB) return remoteRequest<Vendor[]>(remoteCollection("vendors"));
   const db = await getDB();
   const all = await db.getAll("vendors");
   return all.sort((a, b) => a.name.localeCompare(b.name, "ja"));
 }
 
 export async function getVendor(id: string): Promise<Vendor | undefined> {
+  if (USE_REMOTE_DB) return remoteRequest<Vendor | undefined>(`${remoteCollection("vendors")}/${id}`).catch((error) => error.message.includes("APIエラー (404)") ? undefined : Promise.reject(error));
   const db = await getDB();
   return db.get("vendors", id);
 }
 
 export async function putVendor(vendor: Vendor): Promise<void> {
+  if (USE_REMOTE_DB) return remoteRequest<void>(`${remoteCollection("vendors")}/${vendor.id}`, { method: "PUT", body: JSON.stringify(vendor) });
   const db = await getDB();
   await db.put("vendors", vendor);
 }
 
 export async function deleteVendor(id: string): Promise<void> {
+  if (USE_REMOTE_DB) return remoteRequest<void>(`${remoteCollection("vendors")}/${id}`, { method: "DELETE" });
   const db = await getDB();
   await db.delete("vendors", id);
 }
 
 // Clear all data
 export async function clearAllData(): Promise<void> {
+  if (USE_REMOTE_DB) {
+    for (const collection of ["accounts", "journals", "invoices", "receipts", "profile", "settings", "vendors", "fixedAssets", "homeExpenseRules"]) {
+      await remoteRequest<void>(remoteCollection(collection), { method: "DELETE" });
+    }
+    return;
+  }
   const db = await getDB();
   await db.clear("accounts");
   await db.clear("journals");

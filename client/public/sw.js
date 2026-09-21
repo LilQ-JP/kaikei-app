@@ -55,6 +55,9 @@ self.addEventListener("fetch", (event) => {
     return;
   }
 
+  // 会計データAPIは必ずサーバーへ到達させ、古いデータを返さない。
+  if (new URL(request.url).pathname.startsWith("/api/")) return;
+
   // Navigation requests: network-first with fallback to cache
   if (request.mode === "navigate") {
     event.respondWith(
