@@ -6,6 +6,7 @@
 
 import { cn } from "@/lib/utils";
 import { useTheme } from "@/contexts/ThemeContext";
+const remoteMode = import.meta.env.PROD || import.meta.env.VITE_REMOTE_DB === "true";
 import {
   BarChart3,
   BookOpen,
@@ -166,7 +167,7 @@ export default function AppLayout({ children }: { children: React.ReactNode }) {
             )}
           </button>
           <div className="text-[11px] text-muted-foreground px-2.5">
-            データはブラウザに保存されます
+            {remoteMode ? "LenovoサーバーのSQLiteに保存" : "このブラウザのIndexedDBに保存"}
           </div>
         </div>
       </aside>
