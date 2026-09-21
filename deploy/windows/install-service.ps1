@@ -12,22 +12,22 @@ $source = Split-Path -Parent $PSScriptRoot | Split-Path -Parent
 New-Item -ItemType Directory -Force -Path $InstallRoot, $DataRoot | Out-Null
 Copy-Item -Path (Join-Path $source "dist"), (Join-Path $source "package.json"), (Join-Path $source "pnpm-lock.yaml") -Destination $InstallRoot -Recurse -Force
 
-$startScript = Join-Path $InstallRoot "start-service.ps1"
-@"
-`$env:NODE_ENV = 'production'
-`$env:KAIKEI_DATA_DIR = '$DataRoot'
-`$env:PORT = '$Port'
-Set-Location '$InstallRoot'
-& '$NodePath' (Join-Path '$InstallRoot' 'dist\index.js')
-"@ | Set-Content -Encoding UTF8 $startScript
+$launcher = Join-Path $InstallRoot "launcher.mjs"
+@(
+  "Object.assign(process.env,{NODE_ENV:'production',KAIKEI_DATA_DIR:'$($DataRoot -replace '\\','/')',PORT:'$Port'});"
+  "await import('./dist/index.js');"
+) | Set-Content -Encoding UTF8 $launcher
 
+# A plain PowerShell process cannot be registered as a Windows service because
+# it does not speak the Windows service control protocol. Use Task Scheduler,
+# which starts the Node process at boot under SYSTEM and survives logoff.
 if (Get-Service -Name $serviceName -ErrorAction SilentlyContinue) {
   Stop-Service -Name $serviceName -Force -ErrorAction SilentlyContinue
   sc.exe delete $serviceName | Out-Null
   Start-Sleep -Seconds 2
 }
-
-New-Service -Name $serviceName -DisplayName "LilQ 会計サーバー" -Description "個人事業主向け会計アプリ" -BinaryPathName "powershell.exe -NoProfile -ExecutionPolicy Bypass -File `"$startScript`"" -StartupType Automatic
-Start-Service -Name $serviceName
-Write-Host "Installed $serviceName on http://127.0.0.1:$Port"
+$taskAction = "`"$NodePath`" `"$launcher`""
+schtasks.exe /Create /TN $serviceName /SC ONSTART /RU SYSTEM /TR $taskAction /F | Out-Null
+schtasks.exe /Run /TN $serviceName | Out-Null
+Write-Host "Installed $serviceName boot task on http://127.0.0.1:$Port"
 Write-Host "Next: configure Tailscale Serve to forward HTTPS to http://127.0.0.1:$Port"
