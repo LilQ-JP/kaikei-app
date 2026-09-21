@@ -294,7 +294,7 @@ export default function Receipts() {
                     </div>
                     <div className="text-[11px] text-muted-foreground">{aiAnalysis.reason}</div>
                   </div>
-                  <p className="text-[10px] text-muted-foreground mt-2">※ 仕訳入力時にAI自動仕訳機能でこの推定を活用できます</p>
+                  <p className="text-[10px] text-muted-foreground mt-2">※ 仕訳入力時に仕訳候補としてこの推定を確認できます</p>
                 </div>
               )}
 

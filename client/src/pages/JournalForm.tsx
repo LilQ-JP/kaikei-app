@@ -1,10 +1,10 @@
 /**
- * JournalForm — 仕訳入力・編集ページ（AI自動仕訳 + レシート添付 + 複合仕訳 + 決済カード記録）
+ * JournalForm — 仕訳入力・編集ページ（仕訳候補 + レシート添付 + 複合仕訳 + 決済カード記録）
  * macOS Ledger Design
  *
  * - 新規作成 /journals/new
  * - 編集 /journals/edit/:id
- * - 摘要入力でAIが勘定科目を自動推定
+ * - 摘要入力でルール・過去履歴から仕訳候補を推定
  * - レシート画像/PDFを添付して仕訳と紐付け保存
  * - 複合仕訳: 1取引で複数の借方/貸方行を持てる
  * - 決済カード: どのカード/決済手段で支払ったかを記録
@@ -320,7 +320,7 @@ export default function JournalForm() {
       })
     );
     setSuggestions((prev) => ({ ...prev, [entryKey]: null }));
-    toast.success("AIの提案を適用しました");
+    toast.success("仕訳候補を適用しました。内容を確認して保存してください");
   }
 
   function dismissSuggestion(entryKey: string) {
@@ -708,12 +708,12 @@ export default function JournalForm() {
                   onClick={() => setAiEnabled(!aiEnabled)}
                 >
                   <Sparkles className="h-3.5 w-3.5" />
-                  AI自動仕訳
+                  仕訳候補
                 </Button>
               </TooltipTrigger>
               <TooltipContent>
                 <p className="text-[12px]">
-                  {aiEnabled ? "摘要を入力すると勘定科目を自動推定します" : "クリックでAI自動仕訳を有効にします"}
+                  {aiEnabled ? "摘要を入力すると候補を表示します（保存前に確認が必要）" : "クリックで仕訳候補を有効にします"}
                 </p>
               </TooltipContent>
             </Tooltip>
@@ -836,7 +836,7 @@ export default function JournalForm() {
                       {aiEnabled && !isEdit && (
                         <span className="ml-2 text-[10px] font-normal text-primary">
                           <Sparkles className="inline h-3 w-3 mr-0.5 -mt-0.5" />
-                          入力するとAIが科目を推定
+                          入力すると過去履歴・キーワードから候補を推定
                         </span>
                       )}
                     </Label>
@@ -854,7 +854,7 @@ export default function JournalForm() {
                       <Sparkles className="h-4 w-4 text-primary shrink-0" />
                       <div className="flex-1 min-w-0">
                         <div className="flex items-center gap-2 flex-wrap">
-                          <span className="text-[12px] font-bold text-primary">AI提案:</span>
+                          <span className="text-[12px] font-bold text-primary">仕訳候補:</span>
                           <span className="text-[12px] font-semibold">
                             借方: {suggestion.debitAccountName} / 貸方: {suggestion.creditAccountName}
                           </span>

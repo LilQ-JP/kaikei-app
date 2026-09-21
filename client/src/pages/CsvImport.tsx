@@ -1,5 +1,5 @@
 /**
- * CsvImport — CSV取り込みページ（銀行・クレカ明細 + 仕訳帳CSV → AI自動仕訳）
+ * CsvImport — CSV取り込みページ（銀行・クレカ明細 + 仕訳帳CSV → 仕訳候補）
  * macOS Ledger Design
  *
  * 対応フォーマット:
@@ -416,7 +416,7 @@ export default function CsvImport() {
       (r, i) =>
         r.debitAccountId && r.creditAccountId && (!rows[i].debitAccountId || !rows[i].creditAccountId)
     ).length;
-    toast.success(`AI自動仕訳を適用しました（${newlyMatched}件に科目を設定）`);
+  toast.success(`仕訳候補を適用しました（${newlyMatched}件に科目を設定）`);
   }
 
   function toggleRow(key: string) {
@@ -440,7 +440,7 @@ export default function CsvImport() {
     const incomplete = selected.filter((r) => !r.debitAccountId || !r.creditAccountId);
     if (incomplete.length > 0) {
       toast.error(
-        `${incomplete.length}件の仕訳に科目が設定されていません。AI自動仕訳を実行するか、手動で設定してください。`
+        `${incomplete.length}件の仕訳に科目が設定されていません。仕訳候補を実行するか、手動で設定してください。`
       );
       return;
     }
@@ -485,7 +485,7 @@ export default function CsvImport() {
           <div className="flex gap-2">
             <Button variant="outline" size="sm" onClick={runAIOnAll} disabled={aiProcessing}>
               <Sparkles className="h-4 w-4 mr-1" />
-              {aiProcessing ? "処理中..." : "AI自動仕訳"}
+              {aiProcessing ? "候補を計算中..." : "仕訳候補を計算"}
             </Button>
             <Button size="sm" onClick={handleSave} disabled={saving || selectedCount === 0}>
               <Save className="h-4 w-4 mr-1" />
