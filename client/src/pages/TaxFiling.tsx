@@ -49,6 +49,8 @@ const BLUE_FORM_EXPENSE_ITEMS = [
   { label: "雑費", codes: ["544"] },
 ];
 
+type BlueDeduction = "65" | "55" | "10";
+
 export default function TaxFiling() {
   const [journals, setJournals] = useState<JournalEntry[]>([]);
   const [accounts, setAccounts] = useState<AccountItem[]>([]);
@@ -56,6 +58,9 @@ export default function TaxFiling() {
   const [loading, setLoading] = useState(true);
   const [year, setYear] = useState(new Date().getFullYear() - 1);
   const [filingType, setFilingType] = useState<"blue" | "white">("blue");
+  // 65万円はe-Tax申告または優良な電子帳簿保存などの要件を満たす場合だけ選択する。
+  // このアプリ自体はe-Tax送信・優良電子帳簿の適格性を証明しないため、55万円を安全側の初期値にする。
+  const [blueDeduction, setBlueDeduction] = useState<BlueDeduction>("55");
 
   useEffect(() => {
     async function load() {
@@ -139,9 +144,8 @@ export default function TaxFiling() {
     const operatingIncome = grossProfit - totalExpenses;
     const totalIncome = operatingIncome + otherIncome;
 
-    // Blue form specific: 65万円控除 or 10万円控除
-    const blueDeduction = filingType === "blue" ? 650000 : 0;
-    const taxableIncome = Math.max(0, totalIncome - blueDeduction);
+    const deductionAmount = filingType === "blue" ? Number(blueDeduction) * 10000 : 0;
+    const taxableIncome = Math.max(0, totalIncome - deductionAmount);
 
     return {
       salesRevenue,
@@ -152,10 +156,10 @@ export default function TaxFiling() {
       operatingIncome,
       otherIncome,
       totalIncome,
-      blueDeduction,
+      blueDeduction: deductionAmount,
       taxableIncome,
     };
-  }, [yearJournals, accountMap, filingType]);
+  }, [yearJournals, accountMap, filingType, blueDeduction]);
 
   function handleExport() {
     const lines: string[] = [];
@@ -205,6 +209,18 @@ export default function TaxFiling() {
               <SelectItem value="white">白色申告</SelectItem>
             </SelectContent>
           </Select>
+          {filingType === "blue" && (
+            <Select value={blueDeduction} onValueChange={(v) => setBlueDeduction(v as BlueDeduction)}>
+              <SelectTrigger className="w-[150px] h-8 text-[12px]">
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="65">青色控除 65万円</SelectItem>
+                <SelectItem value="55">青色控除 55万円</SelectItem>
+                <SelectItem value="10">青色控除 10万円</SelectItem>
+              </SelectContent>
+            </Select>
+          )}
           <Button variant="outline" size="sm" onClick={handleExport}>
             <Download className="h-4 w-4 mr-1" />CSV
           </Button>

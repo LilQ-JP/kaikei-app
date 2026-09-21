@@ -452,6 +452,7 @@ export async function exportAllData(): Promise<string> {
     receipts: await db.getAll("receipts"),
     profile: await db.get("profile", "default"),
     settings: await db.get("settings", "default"),
+    vendors: await db.getAll("vendors"),
     exportedAt: new Date().toISOString(),
     version: "1.0",
   };
@@ -505,6 +506,15 @@ export async function importAllData(jsonString: string): Promise<void> {
 
   if (data.settings) {
     await db.put("settings", data.settings);
+  }
+
+  if (data.vendors) {
+    const tx = db.transaction("vendors", "readwrite");
+    await tx.store.clear();
+    for (const item of data.vendors) {
+      await tx.store.put(item);
+    }
+    await tx.done;
   }
 }
 

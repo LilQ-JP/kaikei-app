@@ -22,12 +22,16 @@ import {
   getAllJournals,
   getAllInvoices,
   getAllReceipts,
+  getAllVendors,
+  getSettings,
   getProfile,
   putAccount,
   putJournal,
   putInvoice,
   putReceipt,
   putProfile,
+  putVendor,
+  putSettings,
   clearAllData,
 } from "@/lib/db";
 import { downloadFile } from "@/lib/utils";
@@ -60,13 +64,20 @@ export default function DataManagement() {
   }, []);
 
   async function handleExportJSON() {
-    const [accounts, journals, invoices, receipts, profile] = await Promise.all([
+    const [accounts, journals, invoices, receipts, profile, vendors, settings] = await Promise.all([
       getAllAccounts(),
       getAllJournals(),
       getAllInvoices(),
       getAllReceipts(),
       getProfile(),
+      getAllVendors(),
+      getSettings(),
     ]);
+
+    const localStorageData = {
+      fixedAssets: localStorage.getItem("kaikei-fixed-assets"),
+      homeExpenseRules: localStorage.getItem("kaikei-home-expense-rules"),
+    };
 
     const data = {
       version: 1,
@@ -77,6 +88,9 @@ export default function DataManagement() {
       invoices,
       receipts,
       profile,
+      vendors,
+      settings,
+      localStorage: localStorageData,
     };
 
     const json = JSON.stringify(data, null, 2);
@@ -118,6 +132,22 @@ export default function DataManagement() {
       if (data.profile) {
         await putProfile(data.profile);
         imported++;
+      }
+      if (data.vendors?.length) {
+        for (const vendor of data.vendors) await putVendor(vendor);
+        imported += data.vendors.length;
+      }
+      if (data.settings) {
+        await putSettings(data.settings);
+        imported++;
+      }
+      if (data.localStorage) {
+        for (const [key, value] of Object.entries(data.localStorage)) {
+          if (typeof value === "string") localStorage.setItem(
+            key === "fixedAssets" ? "kaikei-fixed-assets" : "kaikei-home-expense-rules",
+            value,
+          );
+        }
       }
 
       toast.success(`${imported}件のデータをインポートしました`);
