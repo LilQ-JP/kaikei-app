@@ -16,9 +16,10 @@ function formatDate(dateStr: string): string {
 }
 
 /**
- * 請求書のHTMLを生成
+ * プレビュー用の自己完結した請求書ドキュメントを生成する。
+ * iframe の srcDoc に渡すため、外部通信やポップアップを必要としない。
  */
-function generateInvoiceHTML(invoice: Invoice, profile?: BusinessProfile): string {
+export function generateInvoiceHTML(invoice: Invoice, profile?: BusinessProfile): string {
   const taxBreakdown = invoice.taxBreakdown?.length ? invoice.taxBreakdown : [{ taxRate: invoice.taxRate, taxableAmount: invoice.subtotal, taxAmount: invoice.taxAmount }];
   const itemRows = invoice.items
     .map(
@@ -181,70 +182,4 @@ function escapeHtml(str: string): string {
     .replace(/>/g, "&gt;")
     .replace(/"/g, "&quot;")
     .replace(/'/g, "&#039;");
-}
-
-/**
- * 請求書をPDFとしてダウンロード（ブラウザの印刷機能を利用）
- */
-export function downloadInvoicePDF(invoice: Invoice, profile?: BusinessProfile): void {
-  const html = generateInvoiceHTML(invoice, profile);
-
-  const printWindow = window.open("", "_blank");
-  if (!printWindow) {
-    // ポップアップブロック対策: iframeで代替
-    const iframe = document.createElement("iframe");
-    iframe.style.position = "fixed";
-    iframe.style.right = "0";
-    iframe.style.bottom = "0";
-    iframe.style.width = "0";
-    iframe.style.height = "0";
-    iframe.style.border = "none";
-    document.body.appendChild(iframe);
-
-    const doc = iframe.contentDocument || iframe.contentWindow?.document;
-    if (doc) {
-      doc.open();
-      doc.write(html);
-      doc.close();
-      setTimeout(() => {
-        iframe.contentWindow?.print();
-        setTimeout(() => document.body.removeChild(iframe), 1000);
-      }, 500);
-    }
-    return;
-  }
-
-  printWindow.document.open();
-  printWindow.document.write(html);
-  printWindow.document.close();
-
-  // フォント読み込み待ち
-  printWindow.onload = () => {
-    setTimeout(() => {
-      printWindow.print();
-    }, 300);
-  };
-
-  // fallback: onloadが発火しない場合
-  setTimeout(() => {
-    try {
-      printWindow.print();
-    } catch {
-      // already printed or window closed
-    }
-  }, 1500);
-}
-
-/**
- * 請求書をプレビュー表示（新しいウィンドウ）
- */
-export function previewInvoice(invoice: Invoice, profile?: BusinessProfile): void {
-  const html = generateInvoiceHTML(invoice, profile);
-
-  const previewWindow = window.open("", "_blank");
-  if (previewWindow) {
-    previewWindow.document.open();
-    previewWindow.document.write(html);
-    previewWindow.document.close();
-  }
 }

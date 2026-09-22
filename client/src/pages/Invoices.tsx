@@ -47,7 +47,7 @@ import {
   type InvoiceItem,
   type BusinessProfile,
 } from "@/lib/db";
-import { downloadInvoicePDF, previewInvoice } from "@/lib/invoice-pdf";
+import { generateInvoiceHTML } from "@/lib/invoice-pdf";
 import {
   formatYen,
   generateInvoiceNumber,
@@ -56,7 +56,7 @@ import {
   INVOICE_STATUS_COLORS,
 } from "@/lib/utils";
 import { Plus, Trash2, FileText, Download, Eye, MoreHorizontal } from "lucide-react";
-import { useEffect, useState, useCallback } from "react";
+import { useEffect, useState, useCallback, useRef } from "react";
 import { toast } from "sonner";
 
 function emptyInvoiceItem(): InvoiceItem {
@@ -68,6 +68,8 @@ export default function Invoices() {
   const [profile, setProfile] = useState<BusinessProfile | undefined>();
   const [loading, setLoading] = useState(true);
   const [dialogOpen, setDialogOpen] = useState(false);
+  const [previewingInvoice, setPreviewingInvoice] = useState<Invoice | null>(null);
+  const previewFrameRef = useRef<HTMLIFrameElement>(null);
 
   // Form state
   const [clientName, setClientName] = useState("");
@@ -192,13 +194,18 @@ export default function Invoices() {
     load();
   }
 
-  function handleDownloadPDF(invoice: Invoice) {
-    downloadInvoicePDF(invoice, profile);
-    toast.success("PDFのダウンロードダイアログを開きました");
+  function handlePreview(invoice: Invoice) {
+    setPreviewingInvoice(invoice);
   }
 
-  function handlePreview(invoice: Invoice) {
-    previewInvoice(invoice, profile);
+  function handlePrintPDF() {
+    const frameWindow = previewFrameRef.current?.contentWindow;
+    if (!frameWindow) {
+      toast.error("プレビューを読み込めませんでした。もう一度お試しください。");
+      return;
+    }
+    frameWindow.focus();
+    frameWindow.print();
   }
 
   if (loading) {
@@ -464,9 +471,9 @@ export default function Invoices() {
                             <Eye className="h-3.5 w-3.5 mr-2" />
                             プレビュー
                           </DropdownMenuItem>
-                          <DropdownMenuItem onClick={() => handleDownloadPDF(inv)}>
+                          <DropdownMenuItem onClick={() => handlePreview(inv)}>
                             <Download className="h-3.5 w-3.5 mr-2" />
-                            PDF出力
+                            PDF保存・印刷
                           </DropdownMenuItem>
                         </DropdownMenuContent>
                       </DropdownMenu>
@@ -506,6 +513,30 @@ export default function Invoices() {
       )}
 
       <div className="mt-3 text-[12px] text-muted-foreground">{invoices.length}件の請求書</div>
+
+      <Dialog open={!!previewingInvoice} onOpenChange={(open) => !open && setPreviewingInvoice(null)}>
+        <DialogContent className="max-w-5xl h-[90vh] flex flex-col p-0 gap-0">
+          <DialogHeader className="px-6 pt-5 pb-3 border-b">
+            <DialogTitle>請求書プレビュー</DialogTitle>
+          </DialogHeader>
+          {previewingInvoice && (
+            <iframe
+              ref={previewFrameRef}
+              title={`請求書 ${previewingInvoice.invoiceNumber}`}
+              srcDoc={generateInvoiceHTML(previewingInvoice, profile)}
+              className="flex-1 w-full border-0 bg-white"
+              sandbox="allow-same-origin allow-modals"
+            />
+          )}
+          <div className="px-6 py-3 border-t flex items-center justify-between gap-3">
+            <p className="text-xs text-muted-foreground">印刷画面で保存先を「PDF に保存」にするとPDFを作成できます。</p>
+            <Button onClick={handlePrintPDF} className="shrink-0">
+              <Download className="h-4 w-4 mr-1.5" />
+              PDF保存・印刷
+            </Button>
+          </div>
+        </DialogContent>
+      </Dialog>
     </div>
   );
 }
