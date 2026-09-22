@@ -21,13 +21,16 @@ $launcher = Join-Path $InstallRoot "launcher.mjs"
 # A plain PowerShell process cannot be registered as a Windows service because
 # it does not speak the Windows service control protocol. Use Task Scheduler,
 # which starts the Node process at boot under SYSTEM and survives logoff.
-if (Get-Service -Name $serviceName -ErrorAction SilentlyContinue) {
-  Stop-Service -Name $serviceName -Force -ErrorAction SilentlyContinue
-  sc.exe delete $serviceName | Out-Null
-  Start-Sleep -Seconds 2
-}
-$taskAction = "`"$NodePath`" `"$launcher`""
-schtasks.exe /Create /TN $serviceName /SC ONSTART /RU SYSTEM /TR $taskAction /F | Out-Null
-schtasks.exe /Run /TN $serviceName | Out-Null
+#
+# Register-ScheduledTask is deliberately used instead of schtasks.exe here.
+# schtasks.exe mis-parses a quoted launcher path under "Program Files", leaving
+# a task that appears installed but cannot start.
+$action = New-ScheduledTaskAction -Execute $NodePath -Argument ("`"{0}`"" -f $launcher)
+$trigger = New-ScheduledTaskTrigger -AtStartup
+$principal = New-ScheduledTaskPrincipal -UserId "SYSTEM" -LogonType ServiceAccount -RunLevel Highest
+$settings = New-ScheduledTaskSettingsSet -StartWhenAvailable -ExecutionTimeLimit (New-TimeSpan -Hours 0)
+$task = New-ScheduledTask -Action $action -Trigger $trigger -Principal $principal -Settings $settings
+Register-ScheduledTask -TaskName $serviceName -InputObject $task -Force | Out-Null
+Start-ScheduledTask -TaskName $serviceName
 Write-Host "Installed $serviceName boot task on http://127.0.0.1:$Port"
 Write-Host "Next: configure Tailscale Serve to forward HTTPS to http://127.0.0.1:$Port"
