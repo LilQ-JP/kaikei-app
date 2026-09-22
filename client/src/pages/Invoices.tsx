@@ -47,7 +47,7 @@ import {
   type InvoiceItem,
   type BusinessProfile,
 } from "@/lib/db";
-import { generateInvoiceHTML } from "@/lib/invoice-pdf";
+import { downloadInvoicePDF, generateInvoiceHTML } from "@/lib/invoice-pdf";
 import {
   formatYen,
   generateInvoiceNumber,
@@ -73,23 +73,25 @@ export default function Invoices() {
 
   // Form state
   const [clientName, setClientName] = useState("");
+  const [clientPostalCode, setClientPostalCode] = useState("");
   const [clientAddress, setClientAddress] = useState("");
+  const [clientBuilding, setClientBuilding] = useState("");
   const [issueDate, setIssueDate] = useState(getToday());
   const [dueDate, setDueDate] = useState("");
   const [items, setItems] = useState<InvoiceItem[]>([emptyInvoiceItem()]);
   const [taxRate, setTaxRate] = useState(10);
   const [notes, setNotes] = useState("");
-  const [bankInfo, setBankInfo] = useState("");
+  const [bankName, setBankName] = useState("");
+  const [bankBranch, setBankBranch] = useState("");
+  const [bankAccountType, setBankAccountType] = useState("普通");
+  const [bankAccountNumber, setBankAccountNumber] = useState("");
+  const [bankAccountName, setBankAccountName] = useState("");
 
   const load = useCallback(async () => {
     const [inv, prof] = await Promise.all([getAllInvoices(), getProfile()]);
     setInvoices(inv);
     setProfile(prof);
-    if (prof?.bankName) {
-      setBankInfo(
-        `${prof.bankName} ${prof.bankBranch || ""} ${prof.bankAccountType || ""} ${prof.bankAccountNumber || ""} ${prof.bankAccountName || ""}`.trim()
-      );
-    }
+    if (prof) applyProfileBankInfo(prof);
     setLoading(false);
   }, []);
 
@@ -147,7 +149,9 @@ export default function Invoices() {
       id: crypto.randomUUID(),
       invoiceNumber: generateInvoiceNumber(),
       clientName,
+      clientPostalCode,
       clientAddress,
+      clientBuilding,
       issueDate,
       dueDate,
       items,
@@ -158,7 +162,11 @@ export default function Invoices() {
       taxBreakdown,
       status: "draft",
       notes,
-      bankInfo,
+      bankName,
+      bankBranch,
+      bankAccountType,
+      bankAccountNumber,
+      bankAccountName,
       createdAt: now,
       updatedAt: now,
     };
@@ -172,12 +180,23 @@ export default function Invoices() {
 
   function resetForm() {
     setClientName("");
+    setClientPostalCode("");
     setClientAddress("");
+    setClientBuilding("");
     setIssueDate(getToday());
     setDueDate("");
     setItems([emptyInvoiceItem()]);
     setTaxRate(10);
     setNotes("");
+    if (profile) applyProfileBankInfo(profile);
+  }
+
+  function applyProfileBankInfo(prof: BusinessProfile) {
+    setBankName(prof.bankName || "");
+    setBankBranch(prof.bankBranch || "");
+    setBankAccountType(prof.bankAccountType || "普通");
+    setBankAccountNumber(prof.bankAccountNumber || "");
+    setBankAccountName(prof.bankAccountName || "");
   }
 
   async function updateStatus(id: string, status: Invoice["status"]) {
@@ -199,13 +218,10 @@ export default function Invoices() {
   }
 
   function handlePrintPDF() {
-    const frameWindow = previewFrameRef.current?.contentWindow;
-    if (!frameWindow) {
-      toast.error("プレビューを読み込めませんでした。もう一度お試しください。");
-      return;
-    }
-    frameWindow.focus();
-    frameWindow.print();
+    if (!previewingInvoice || !previewFrameRef.current) return;
+    downloadInvoicePDF(previewFrameRef.current, previewingInvoice)
+      .then(() => toast.success("PDFファイルを保存しました"))
+      .catch((error) => toast.error(error instanceof Error ? error.message : "PDFの保存に失敗しました。"));
   }
 
   if (loading) {
@@ -243,12 +259,22 @@ export default function Invoices() {
                   />
                 </div>
                 <div>
-                  <Label className="text-[12px] font-semibold">請求先住所</Label>
+                  <Label className="text-[12px] font-semibold">郵便番号</Label>
+                  <Input value={clientPostalCode} onChange={(e) => setClientPostalCode(e.target.value)} className="mt-1 text-[13px] font-mono" placeholder="123-4567" inputMode="numeric" />
+                </div>
+              </div>
+              <div className="grid grid-cols-2 gap-4">
+                <div>
+                  <Label className="text-[12px] font-semibold">住所</Label>
                   <Input
                     value={clientAddress}
                     onChange={(e) => setClientAddress(e.target.value)}
                     className="mt-1 text-[13px]"
                   />
+                </div>
+                <div>
+                  <Label className="text-[12px] font-semibold">建物名・部屋番号</Label>
+                  <Input value={clientBuilding} onChange={(e) => setClientBuilding(e.target.value)} className="mt-1 text-[13px]" placeholder="○○マンション 101" />
                 </div>
               </div>
               <div className="grid grid-cols-3 gap-4">
@@ -379,14 +405,15 @@ export default function Invoices() {
               </div>
 
               {/* Bank info & notes */}
-              <div>
+              <div className="space-y-2 rounded-md border p-3">
                 <Label className="text-[12px] font-semibold">振込先情報</Label>
-                <Input
-                  value={bankInfo}
-                  onChange={(e) => setBankInfo(e.target.value)}
-                  className="mt-1 text-[13px]"
-                  placeholder="〇〇銀行 〇〇支店 普通 1234567"
-                />
+                <div className="grid grid-cols-2 gap-3">
+                  <div><Label className="text-[11px] text-muted-foreground">銀行名</Label><Input value={bankName} onChange={(e) => setBankName(e.target.value)} className="mt-1 text-[13px]" placeholder="○○銀行" /></div>
+                  <div><Label className="text-[11px] text-muted-foreground">支店名</Label><Input value={bankBranch} onChange={(e) => setBankBranch(e.target.value)} className="mt-1 text-[13px]" placeholder="○○支店" /></div>
+                  <div><Label className="text-[11px] text-muted-foreground">口座種別</Label><Select value={bankAccountType} onValueChange={setBankAccountType}><SelectTrigger className="mt-1 text-[13px]"><SelectValue /></SelectTrigger><SelectContent><SelectItem value="普通">普通</SelectItem><SelectItem value="当座">当座</SelectItem><SelectItem value="貯蓄">貯蓄</SelectItem></SelectContent></Select></div>
+                  <div><Label className="text-[11px] text-muted-foreground">口座番号</Label><Input value={bankAccountNumber} onChange={(e) => setBankAccountNumber(e.target.value)} className="mt-1 text-[13px] font-mono" placeholder="1234567" inputMode="numeric" /></div>
+                </div>
+                <div><Label className="text-[11px] text-muted-foreground">口座名義</Label><Input value={bankAccountName} onChange={(e) => setBankAccountName(e.target.value)} className="mt-1 text-[13px]" placeholder="ヤマダ タロウ" /></div>
               </div>
               <div>
                 <Label className="text-[12px] font-semibold">備考</Label>
@@ -529,7 +556,7 @@ export default function Invoices() {
             />
           )}
           <div className="px-6 py-3 border-t flex items-center justify-between gap-3">
-            <p className="text-xs text-muted-foreground">印刷画面で保存先を「PDF に保存」にするとPDFを作成できます。</p>
+            <p className="text-xs text-muted-foreground">請求書をPDFファイルとして直接保存します。</p>
             <Button onClick={handlePrintPDF} className="shrink-0">
               <Download className="h-4 w-4 mr-1.5" />
               PDF保存・印刷

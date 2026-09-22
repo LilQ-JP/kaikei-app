@@ -66,7 +66,9 @@ export interface Invoice {
   id: string;
   invoiceNumber: string;
   clientName: string;
+  clientPostalCode?: string;
   clientAddress?: string;
+  clientBuilding?: string;
   clientEmail?: string;
   issueDate: string;
   dueDate: string;
@@ -79,6 +81,11 @@ export interface Invoice {
   status: "draft" | "sent" | "paid" | "overdue";
   notes?: string;
   bankInfo?: string;
+  bankName?: string;
+  bankBranch?: string;
+  bankAccountType?: string;
+  bankAccountNumber?: string;
+  bankAccountName?: string;
   createdAt: string;
   updatedAt: string;
 }

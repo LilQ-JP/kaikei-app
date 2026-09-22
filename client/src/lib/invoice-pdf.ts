@@ -8,6 +8,8 @@
 
 import { type Invoice, type BusinessProfile } from "./db";
 import { formatYen } from "./utils";
+import html2canvas from "html2canvas";
+import { jsPDF } from "jspdf";
 
 function formatDate(dateStr: string): string {
   if (!dateStr) return "";
@@ -99,7 +101,7 @@ export function generateInvoiceHTML(invoice: Invoice, profile?: BusinessProfile)
       <div style="flex:1;">
         <div style="font-size:11px;color:#86868b;font-weight:600;text-transform:uppercase;letter-spacing:0.05em;margin-bottom:8px;padding-bottom:6px;border-bottom:2px solid #1d1d1f;">請求先</div>
         <div style="font-size:16px;font-weight:700;margin-bottom:4px;">${escapeHtml(invoice.clientName)} 御中</div>
-        ${invoice.clientAddress ? `<div style="font-size:12px;color:#6e6e73;">${escapeHtml(invoice.clientAddress)}</div>` : ""}
+        ${formatInvoiceAddress(invoice)}
       </div>
       <div style="flex:1;text-align:right;">
         <div style="font-size:11px;color:#86868b;font-weight:600;text-transform:uppercase;letter-spacing:0.05em;margin-bottom:8px;padding-bottom:6px;border-bottom:2px solid #1d1d1f;text-align:left;">発行者</div>
@@ -153,10 +155,10 @@ export function generateInvoiceHTML(invoice: Invoice, profile?: BusinessProfile)
     </div>
 
     <!-- Bank info -->
-    ${invoice.bankInfo ? `
+    ${formatBankInfo(invoice) ? `
     <div style="background:#f5f5f7;border-radius:8px;padding:16px 20px;margin-bottom:16px;">
       <div style="font-size:11px;font-weight:700;color:#86868b;text-transform:uppercase;letter-spacing:0.05em;margin-bottom:8px;">振込先</div>
-      <div style="font-size:13px;font-weight:600;">${escapeHtml(invoice.bankInfo)}</div>
+      <div style="font-size:13px;font-weight:600;white-space:pre-line;">${escapeHtml(formatBankInfo(invoice))}</div>
     </div>` : ""}
 
     <!-- Notes -->
@@ -173,6 +175,46 @@ export function generateInvoiceHTML(invoice: Invoice, profile?: BusinessProfile)
   </div>
 </body>
 </html>`;
+}
+
+function formatInvoiceAddress(invoice: Invoice): string {
+  const lines = [
+    invoice.clientPostalCode ? `〒${invoice.clientPostalCode}` : "",
+    invoice.clientAddress || "",
+    invoice.clientBuilding || "",
+  ].filter(Boolean);
+  return lines.length ? `<div style="font-size:12px;color:#6e6e73;white-space:pre-line;">${lines.map(escapeHtml).join("<br />")}</div>` : "";
+}
+
+function formatBankInfo(invoice: Invoice): string {
+  const structured = [
+    [invoice.bankName, invoice.bankBranch].filter(Boolean).join(" "),
+    [invoice.bankAccountType, invoice.bankAccountNumber].filter(Boolean).join(" "),
+    invoice.bankAccountName || "",
+  ].filter(Boolean).join("\n");
+  return structured || invoice.bankInfo || "";
+}
+
+/** Download a real PDF file, without relying on the browser print dialog. */
+export async function downloadInvoicePDF(frame: HTMLIFrameElement, invoice: Invoice): Promise<void> {
+  const page = frame.contentDocument?.querySelector<HTMLElement>(".page");
+  if (!page) throw new Error("請求書プレビューを読み込めませんでした。");
+
+  const canvas = await html2canvas(page, { backgroundColor: "#ffffff", scale: 2, useCORS: false, logging: false });
+  const pdf = new jsPDF({ orientation: "p", unit: "mm", format: "a4", compress: true });
+  const imageData = canvas.toDataURL("image/jpeg", 0.95);
+  const imageHeight = (canvas.height * 210) / canvas.width;
+  let remainingHeight = imageHeight;
+  let y = 0;
+  while (remainingHeight > 0) {
+    pdf.addImage(imageData, "JPEG", 0, y, 210, imageHeight, undefined, "FAST");
+    remainingHeight -= 297;
+    if (remainingHeight > 0) {
+      pdf.addPage();
+      y -= 297;
+    }
+  }
+  pdf.save(`${invoice.invoiceNumber}.pdf`);
 }
 
 function escapeHtml(str: string): string {
