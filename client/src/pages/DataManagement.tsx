@@ -36,7 +36,7 @@ import {
 } from "@/lib/db";
 import { loadAppJson, saveAppJson } from "@/lib/app-storage";
 import { downloadFile } from "@/lib/utils";
-import { Download, Upload, Trash2, Database, HardDrive } from "lucide-react";
+import { Download, Upload, Trash2, Database, HardDrive, ShieldCheck } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 import { toast } from "sonner";
 
@@ -44,6 +44,8 @@ const remoteMode = import.meta.env.PROD || import.meta.env.VITE_REMOTE_DB === "t
 
 export default function DataManagement() {
   const [stats, setStats] = useState({ accounts: 0, journals: 0, invoices: 0, receipts: 0 });
+  const [backups, setBackups] = useState<Array<{ name: string; size: number; updatedAt: string }>>([]);
+  const [verifying, setVerifying] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
   const fileInputRef = useRef<HTMLInputElement>(null);
 
@@ -61,6 +63,10 @@ export default function DataManagement() {
         invoices: i.length,
         receipts: r.length,
       });
+      if (remoteMode) {
+        const response = await fetch("/api/v1/backups", { credentials: "include" });
+        if (response.ok) setBackups(await response.json());
+      }
       setLoading(false);
     }
     load();
@@ -179,6 +185,22 @@ export default function DataManagement() {
     if (!response.ok) { toast.error("暗号化バックアップに失敗しました"); return; }
     const result = await response.json();
     toast.success(`暗号化バックアップを作成しました（${result.recordCount}件）`);
+    const backupsResponse = await fetch("/api/v1/backups", { credentials: "include" });
+    if (backupsResponse.ok) setBackups(await backupsResponse.json());
+  }
+
+  async function handleVerifyBackup(name: string) {
+    setVerifying(name);
+    try {
+      const response = await fetch(`/api/v1/backups/${encodeURIComponent(name)}/verify`, { method: "POST", credentials: "include" });
+      const result = await response.json();
+      if (!response.ok) throw new Error(result.error || "検証に失敗しました");
+      toast.success(`復元検証に成功しました（${result.recordCount}件 / 監査${result.auditEventCount}件）`);
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : "検証に失敗しました");
+    } finally {
+      setVerifying(null);
+    }
   }
 
   if (loading) {
@@ -235,6 +257,19 @@ export default function DataManagement() {
             </div>
             <Button variant="outline" size="sm" onClick={handleServerBackup}><HardDrive className="h-4 w-4 mr-1" />作成</Button>
           </CardContent>
+          {remoteMode && backups.length > 0 && (
+            <CardContent className="pt-0 px-4 pb-4 space-y-2">
+              <p className="text-[11px] text-muted-foreground">最新バックアップを一時SQLiteへ復元して件数を照合します。本番データは変更しません。</p>
+              {backups.slice(0, 3).map((backup) => (
+                <div key={backup.name} className="flex items-center justify-between gap-3 text-[12px] rounded border p-2">
+                  <span className="truncate">{backup.name}</span>
+                  <Button variant="outline" size="sm" disabled={verifying !== null} onClick={() => handleVerifyBackup(backup.name)}>
+                    <ShieldCheck className="h-3.5 w-3.5 mr-1" />{verifying === backup.name ? "検証中…" : "復元検証"}
+                  </Button>
+                </div>
+              ))}
+            </CardContent>
+          )}
         </Card>
         {/* Export */}
         <Card className="border shadow-sm">

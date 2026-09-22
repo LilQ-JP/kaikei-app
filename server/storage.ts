@@ -1,7 +1,7 @@
 import { DatabaseSync } from "node:sqlite";
 import fs from "node:fs";
 import path from "node:path";
-import { createCipheriv, randomBytes, scryptSync, timingSafeEqual } from "node:crypto";
+import { createCipheriv, createDecipheriv, randomBytes, scryptSync, timingSafeEqual } from "node:crypto";
 
 export const RECORD_COLLECTIONS = [
   "accounts",
@@ -204,4 +204,83 @@ export function listEncryptedBackups() {
     const file = path.join(dataPaths.backups, name);
     return { name, size: fs.statSync(file).size, updatedAt: fs.statSync(file).mtime.toISOString() };
   });
+}
+
+type BackupPayload = {
+  version: number;
+  createdAt: string;
+  records: Array<{ collection: string; id: string; data: string; updated_at: string }>;
+  audit: Array<{ action: string; collection?: string; record_id?: string; occurred_at: string }>;
+};
+
+function readBackupPayload(name: string): BackupPayload {
+  // Never let an API parameter select a path outside of the backup directory.
+  if (!/^[A-Za-z0-9-]+\.backup$/.test(name) || path.basename(name) !== name) {
+    throw new Error("バックアップ名が不正です");
+  }
+  const raw = fs.readFileSync(path.join(dataPaths.backups, name));
+  if (raw.length < 32 || raw.subarray(0, 4).toString("utf8") !== "LKQ1") {
+    throw new Error("バックアップ形式が不正です");
+  }
+  const decipher = createDecipheriv("aes-256-gcm", getBackupKey(), raw.subarray(4, 16));
+  decipher.setAuthTag(raw.subarray(16, 32));
+  let value: unknown;
+  try {
+    value = JSON.parse(Buffer.concat([decipher.update(raw.subarray(32)), decipher.final()]).toString("utf8"));
+  } catch {
+    throw new Error("バックアップを復号できません。鍵またはファイルを確認してください");
+  }
+  if (!value || typeof value !== "object") throw new Error("バックアップ内容が不正です");
+  const payload = value as Partial<BackupPayload>;
+  if (payload.version !== 1 || !Array.isArray(payload.records) || !Array.isArray(payload.audit) || typeof payload.createdAt !== "string") {
+    throw new Error("バックアップ内容が不正です");
+  }
+  for (const record of payload.records) {
+    if (!record || typeof record.collection !== "string" || typeof record.id !== "string" || typeof record.data !== "string" || typeof record.updated_at !== "string") {
+      throw new Error("バックアップ内のレコードが不正です");
+    }
+    assertCollection(record.collection);
+    JSON.parse(record.data);
+  }
+  return payload as BackupPayload;
+}
+
+/**
+ * Restores a backup into an isolated SQLite database and verifies record counts.
+ * The production database is never opened for writing by this operation.
+ */
+export function verifyEncryptedBackup(name: string) {
+  const payload = readBackupPayload(name);
+  const tempRoot = fs.mkdtempSync(path.join(dataPaths.root, "restore-verify-"));
+  const tempDatabase = path.join(tempRoot, "verification.sqlite");
+  let verificationDb: DatabaseSync | undefined;
+  try {
+    verificationDb = new DatabaseSync(tempDatabase);
+    verificationDb.exec(`
+      PRAGMA journal_mode = DELETE;
+      CREATE TABLE records (collection TEXT NOT NULL, id TEXT NOT NULL, data TEXT NOT NULL, updated_at TEXT NOT NULL, PRIMARY KEY (collection, id));
+      CREATE TABLE audit_events (action TEXT NOT NULL, collection TEXT, record_id TEXT, occurred_at TEXT NOT NULL);
+    `);
+    const insertRecord = verificationDb.prepare("INSERT INTO records(collection, id, data, updated_at) VALUES (?, ?, ?, ?)");
+    const insertAudit = verificationDb.prepare("INSERT INTO audit_events(action, collection, record_id, occurred_at) VALUES (?, ?, ?, ?)");
+    verificationDb.exec("BEGIN IMMEDIATE");
+    try {
+      for (const record of payload.records) insertRecord.run(record.collection, record.id, record.data, record.updated_at);
+      for (const event of payload.audit) {
+        if (!event || typeof event.action !== "string" || typeof event.occurred_at !== "string") throw new Error("バックアップ内の監査記録が不正です");
+        insertAudit.run(event.action, event.collection ?? null, event.record_id ?? null, event.occurred_at);
+      }
+      verificationDb.exec("COMMIT");
+    } catch (error) {
+      verificationDb.exec("ROLLBACK");
+      throw error;
+    }
+    const recordCount = (verificationDb.prepare("SELECT COUNT(*) AS count FROM records").get() as { count: number }).count;
+    const auditEventCount = (verificationDb.prepare("SELECT COUNT(*) AS count FROM audit_events").get() as { count: number }).count;
+    if (recordCount !== payload.records.length || auditEventCount !== payload.audit.length) throw new Error("復元後の件数照合に失敗しました");
+    return { name, createdAt: payload.createdAt, recordCount, auditEventCount, verifiedAt: now() };
+  } finally {
+    verificationDb?.close();
+    fs.rmSync(tempRoot, { recursive: true, force: true });
+  }
 }

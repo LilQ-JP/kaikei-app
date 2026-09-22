@@ -2,7 +2,7 @@ import express from "express";
 import { createServer } from "http";
 import path from "path";
 import { fileURLToPath } from "url";
-import { assertCollection, clearRecords, createEncryptedBackup, createSession, deleteRecord, deleteSession, getRecord, getSession, hasAdminUser, listEncryptedBackups, listRecords, putRecord, putRecordsAtomic, setAdminPassword, verifyAdminPassword } from "./storage";
+import { assertCollection, clearRecords, createEncryptedBackup, createSession, deleteRecord, deleteSession, getRecord, getSession, hasAdminUser, listEncryptedBackups, listRecords, putRecord, putRecordsAtomic, setAdminPassword, verifyAdminPassword, verifyEncryptedBackup } from "./storage";
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -53,6 +53,10 @@ async function startServer() {
   app.post("/api/v1/backups", requireSession, (_req, res) => {
     try { return res.status(201).json(createEncryptedBackup(res.locals.userId)); }
     catch (error) { return res.status(500).json({ error: error instanceof Error ? error.message : "バックアップに失敗しました" }); }
+  });
+  app.post("/api/v1/backups/:name/verify", requireSession, (req, res) => {
+    try { return res.json(verifyEncryptedBackup(req.params.name)); }
+    catch (error) { return res.status(400).json({ error: error instanceof Error ? error.message : "バックアップ検証に失敗しました" }); }
   });
 
   app.get("/api/v1/records/:collection", requireSession, (req, res) => {
