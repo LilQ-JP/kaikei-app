@@ -19,6 +19,7 @@ import {
 } from "@/lib/db";
 import { formatYen, CATEGORY_LABELS } from "@/lib/utils";
 import { useEffect, useMemo, useState } from "react";
+import { isDebitNormal } from "@shared/accounting";
 
 export default function Ledger() {
   const [journals, setJournals] = useState<JournalEntry[]>([]);
@@ -58,7 +59,7 @@ export default function Ledger() {
 
     let balance = 0;
     const account = accountMap.get(selectedAccountId);
-    const isDebitNormal = account?.category === "asset" || account?.category === "expense";
+    const debitNormal = account ? isDebitNormal(account) : true;
 
     return entries.map((j) => {
       const isDebit = j.debitAccountId === selectedAccountId;
@@ -68,7 +69,7 @@ export default function Ledger() {
         ? accountMap.get(j.creditAccountId)
         : accountMap.get(j.debitAccountId);
 
-      if (isDebitNormal) {
+      if (debitNormal) {
         balance += debitAmount - creditAmount;
       } else {
         balance += creditAmount - debitAmount;

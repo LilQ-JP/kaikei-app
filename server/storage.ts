@@ -2,6 +2,7 @@ import { DatabaseSync } from "node:sqlite";
 import fs from "node:fs";
 import path from "node:path";
 import { createCipheriv, createDecipheriv, randomBytes, scryptSync, timingSafeEqual } from "node:crypto";
+import { z } from "zod";
 
 export const RECORD_COLLECTIONS = [
   "accounts",
@@ -13,6 +14,7 @@ export const RECORD_COLLECTIONS = [
   "vendors",
   "fixedAssets",
   "homeExpenseRules",
+  "fiscalYears",
 ] as const;
 
 export type RecordCollection = (typeof RECORD_COLLECTIONS)[number];
@@ -58,7 +60,8 @@ database.exec(`
   CREATE TABLE IF NOT EXISTS sessions (
     token_hash TEXT PRIMARY KEY,
     user_id TEXT NOT NULL REFERENCES users(id),
-    expires_at TEXT NOT NULL
+    expires_at TEXT NOT NULL,
+    csrf_token TEXT
   );
   CREATE TABLE IF NOT EXISTS audit_events (
     id TEXT PRIMARY KEY,
@@ -70,6 +73,9 @@ database.exec(`
     data TEXT
   );
 `);
+// Existing Lenovo databases predate CSRF tokens.  Invalidating their old
+// sessions is intentional: a fresh login is required before a write.
+try { database.exec("ALTER TABLE sessions ADD COLUMN csrf_token TEXT"); } catch { /* column already exists */ }
 
 const collectionSet = new Set<string>(RECORD_COLLECTIONS);
 export function assertCollection(value: string): asserts value is RecordCollection {
@@ -90,7 +96,43 @@ export function getRecord(collection: RecordCollection, id: string): unknown | u
   return row?.data ? JSON.parse(row.data) : undefined;
 }
 
+const journalSchema = z.object({
+  id: z.string().min(1).max(128),
+  date: z.string().regex(/^\d{4}-\d{2}-\d{2}$/),
+  debitAccountId: z.string().min(1).max(128),
+  creditAccountId: z.string().min(1).max(128),
+  amount: z.number().int().positive().safe(),
+  description: z.string().max(1000),
+  status: z.enum(["draft", "posted", "reversed"]).optional(),
+  reversalOf: z.string().min(1).max(128).optional(),
+  sourceKey: z.string().min(1).max(256).optional(),
+}).passthrough();
+
+function assertRecordIsValid(collection: RecordCollection, id: string, data: unknown) {
+  if (!data || typeof data !== "object" || Array.isArray(data)) throw new Error("保存データが不正です");
+  const record = data as Record<string, unknown>;
+  if (record.id !== id) throw new Error("URLとデータのIDが一致しません");
+  if (collection !== "journals") return;
+  const journal = journalSchema.parse(data);
+  if (journal.debitAccountId === journal.creditAccountId) throw new Error("借方と貸方に同じ科目は指定できません");
+  for (const accountId of [journal.debitAccountId, journal.creditAccountId]) {
+    if (!getRecord("accounts", accountId)) throw new Error("存在しない勘定科目は使用できません");
+  }
+  if (journal.sourceKey) {
+    const duplicate = database.prepare("SELECT id FROM records WHERE collection = 'journals' AND id != ? AND json_extract(data, '$.sourceKey') = ?").get(id, journal.sourceKey) as { id?: string } | undefined;
+    if (duplicate) throw new Error("同じ自動生成仕訳がすでに存在します");
+  }
+  if (journal.reversalOf && !getRecord("journals", journal.reversalOf)) {
+    throw new Error("訂正対象の仕訳が見つかりません");
+  }
+  const existing = getRecord("journals", id) as { status?: unknown } | undefined;
+  if (existing && (existing.status ?? "posted") !== "draft") {
+    throw new Error("確定済み仕訳は編集できません。訂正は反対仕訳で行ってください");
+  }
+}
+
 export function putRecord(collection: RecordCollection, id: string, data: unknown, userId: string) {
+  assertRecordIsValid(collection, id, data);
   const timestamp = now();
   const serialized = JSON.stringify(data);
   database.prepare(`
@@ -102,6 +144,12 @@ export function putRecord(collection: RecordCollection, id: string, data: unknow
 }
 
 export function deleteRecord(collection: RecordCollection, id: string, userId: string) {
+  if (collection === "journals") {
+    const existing = getRecord("journals", id) as { status?: unknown } | undefined;
+    if (existing && (existing.status ?? "posted") !== "draft") {
+      throw new Error("確定済み仕訳は削除できません。訂正は反対仕訳で行ってください");
+    }
+  }
   const timestamp = now();
   database.prepare("DELETE FROM records WHERE collection = ? AND id = ?").run(collection, id);
   database.prepare("INSERT INTO audit_events(id, user_id, action, collection, record_id, occurred_at) VALUES (?, ?, ?, ?, ?, ?)")
@@ -109,6 +157,7 @@ export function deleteRecord(collection: RecordCollection, id: string, userId: s
 }
 
 export function clearRecords(collection: RecordCollection, userId: string) {
+  if (collection === "journals") throw new Error("仕訳帳の一括削除は許可されていません");
   const timestamp = now();
   database.prepare("DELETE FROM records WHERE collection = ?").run(collection);
   database.prepare("INSERT INTO audit_events(id, user_id, action, collection, occurred_at) VALUES (?, ?, ?, ?, ?)")
@@ -125,6 +174,7 @@ export function putRecordsAtomic(collection: RecordCollection, records: Array<{ 
   database.exec("BEGIN IMMEDIATE");
   try {
     for (const record of records) {
+      assertRecordIsValid(collection, record.id, record.data);
       const serialized = JSON.stringify(record.data);
       put.run(collection, record.id, serialized, timestamp);
       audit.run(randomBytes(16).toString("hex"), userId, "upsert", collection, record.id, timestamp, serialized);
@@ -161,19 +211,20 @@ export function verifyAdminPassword(password: string): boolean {
   return actual.length === expected.length && timingSafeEqual(actual, expected);
 }
 
-export function createSession(): { token: string; expiresAt: string } {
+export function createSession(): { token: string; csrfToken: string; expiresAt: string } {
   const token = randomBytes(32).toString("base64url");
+  const csrfToken = randomBytes(32).toString("base64url");
   const expiresAt = new Date(Date.now() + 1000 * 60 * 60 * 12).toISOString();
-  database.prepare("INSERT INTO sessions(token_hash, user_id, expires_at) VALUES (?, ?, ?)").run(scryptSync(token, "kaikei-session", 32).toString("hex"), "owner", expiresAt);
-  return { token, expiresAt };
+  database.prepare("INSERT INTO sessions(token_hash, user_id, expires_at, csrf_token) VALUES (?, ?, ?, ?)").run(scryptSync(token, "kaikei-session", 32).toString("hex"), "owner", expiresAt, csrfToken);
+  return { token, csrfToken, expiresAt };
 }
 
-export function getSession(token: string | undefined): { userId: string } | undefined {
+export function getSession(token: string | undefined): { userId: string; csrfToken: string } | undefined {
   if (!token) return undefined;
   const hash = scryptSync(token, "kaikei-session", 32).toString("hex");
-  const row = database.prepare("SELECT user_id, expires_at FROM sessions WHERE token_hash = ?").get(hash) as { user_id?: string; expires_at?: string } | undefined;
-  if (!row?.user_id || !row.expires_at || new Date(row.expires_at).getTime() <= Date.now()) return undefined;
-  return { userId: row.user_id };
+  const row = database.prepare("SELECT user_id, expires_at, csrf_token FROM sessions WHERE token_hash = ?").get(hash) as { user_id?: string; expires_at?: string; csrf_token?: string } | undefined;
+  if (!row?.user_id || !row.expires_at || !row.csrf_token || new Date(row.expires_at).getTime() <= Date.now()) return undefined;
+  return { userId: row.user_id, csrfToken: row.csrf_token };
 }
 
 export function deleteSession(token: string | undefined) {

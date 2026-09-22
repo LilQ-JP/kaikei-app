@@ -47,3 +47,48 @@ test("不正な仕訳を拒否する", () => {
   assert.match(validateBalancedJournal(journal("1", "cash", "cash", 100)), /同じ科目/);
   assert.match(validateBalancedJournal(journal("1", "cash", "sales", 1.5)), /整数/);
 });
+
+test("複合仕訳は借貸合計が一致する場合だけ集計する", () => {
+  const compound = {
+    id: "compound", date: "2026-01-01",
+    lines: [
+      { side: "debit" as const, accountId: "cash", amount: 600 },
+      { side: "debit" as const, accountId: "expense", amount: 400 },
+      { side: "credit" as const, accountId: "capital", amount: 1000 },
+    ],
+  };
+  assert.equal(validateBalancedJournal(compound), null);
+  const balances = summarizeBalances(accounts, [compound]);
+  assert.equal(balances.get("cash")?.debitBalance, 600);
+  assert.equal(balances.get("expense")?.debitBalance, 400);
+  assert.equal(balances.get("capital")?.creditBalance, 1000);
+  assert.match(validateBalancedJournal({ ...compound, lines: compound.lines.slice(0, 2) }), /両方/);
+});
+
+test("過年度利益を含めて翌年度の貸借対照表を一致させる", () => {
+  const previousYear = [{ ...journal("prior", "cash", "sales", 100), date: "2025-12-31" }];
+  const result = calculateBalanceSheet(accounts, previousYear, []);
+  assert.equal(result.netIncome, 0);
+  assert.equal(result.cumulativeNetIncome, 100);
+  assert.equal(result.totalAssets, 100);
+  assert.equal(result.totalEquity, 100);
+  assert.equal(result.isBalanced, true);
+});
+
+test("減価償却累計額は資産から控除して貸借を一致させる", () => {
+  const depreciationAccounts = [
+    ...accounts,
+    { id: "equipment", code: "156", name: "工具器具備品", category: "asset" as const },
+    { id: "accumulated", code: "159", name: "減価償却累計額", category: "asset" as const, normalBalance: "credit" as const },
+    { id: "depreciation", code: "530", name: "減価償却費", category: "expense" as const },
+  ];
+  const journals = [
+    journal("1", "equipment", "capital", 100),
+    journal("2", "depreciation", "accumulated", 20),
+  ];
+  const result = calculateBalanceSheet(depreciationAccounts, journals, journals);
+  assert.equal(result.assetItems.find((item) => item.account.id === "accumulated")?.balance, -20);
+  assert.equal(result.totalAssets, 80);
+  assert.equal(result.totalEquity, 80);
+  assert.equal(result.isBalanced, true);
+});

@@ -21,11 +21,11 @@ import {
   type JournalEntry,
   type BusinessProfile,
 } from "@/lib/db";
-import { formatYen, downloadFile } from "@/lib/utils";
+import { formatYen, downloadFile, getFiscalYearRange } from "@/lib/utils";
 import { Download, FileText, Info } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
 import { toast } from "sonner";
-import { summarizeBalances } from "@shared/accounting";
+import { calculateProfitLoss } from "@shared/accounting";
 import { Link } from "wouter";
 
 // 青色申告決算書の経費科目マッピング
@@ -50,7 +50,7 @@ const BLUE_FORM_EXPENSE_ITEMS = [
   { label: "雑費", codes: ["544"] },
 ];
 
-type BlueDeduction = "65" | "55" | "10";
+type BlueDeduction = "55" | "10";
 
 export default function TaxFiling() {
   const [journals, setJournals] = useState<JournalEntry[]>([]);
@@ -75,9 +75,10 @@ export default function TaxFiling() {
     load();
   }, []);
 
+  const fiscalRange = useMemo(() => getFiscalYearRange(year, profile?.fiscalYearStart || 1), [year, profile?.fiscalYearStart]);
   const yearJournals = useMemo(
-    () => journals.filter((j) => j.date.startsWith(String(year))),
-    [journals, year]
+    () => journals.filter((j) => j.date >= fiscalRange.start && j.date <= fiscalRange.end),
+    [journals, fiscalRange]
   );
 
   const codeToAccountId = useMemo(() => {
@@ -87,14 +88,17 @@ export default function TaxFiling() {
   }, [accounts]);
 
   const taxData = useMemo(() => {
-    const balances = summarizeBalances(accounts, yearJournals);
+    const profitLoss = calculateProfitLoss(accounts, yearJournals);
+    const netByAccount = new Map<string, number>();
+    for (const item of profitLoss.incomeItems) netByAccount.set(item.account.id, item.amount);
+    for (const item of profitLoss.expenseItems) netByAccount.set(item.account.id, item.amount);
     // Revenue
     let salesRevenue = 0;
     let otherIncome = 0;
 
     accounts.forEach((account) => {
       if (account.category !== "income") return;
-      const amount = balances.get(account.id)?.creditBalance || 0;
+      const amount = netByAccount.get(account.id) || 0;
       if (account.code === "400") salesRevenue += amount;
       else otherIncome += amount;
     });
@@ -102,7 +106,7 @@ export default function TaxFiling() {
     // Cost of goods sold
     const cogs = accounts
       .filter((account) => account.code === "500")
-      .reduce((sum, account) => sum + (balances.get(account.id)?.debitBalance || 0), 0);
+      .reduce((sum, account) => sum + (netByAccount.get(account.id) || 0), 0);
 
     const grossProfit = salesRevenue - cogs;
 
@@ -110,8 +114,8 @@ export default function TaxFiling() {
     const expenseByCode = new Map<string, number>();
     accounts.forEach((account) => {
       if (account.category !== "expense" || account.code === "500") return;
-      const amount = balances.get(account.id)?.debitBalance || 0;
-      if (amount > 0) expenseByCode.set(account.code, amount);
+      const amount = netByAccount.get(account.id) || 0;
+      if (amount !== 0) expenseByCode.set(account.code, amount);
     });
 
     const expenseItems = BLUE_FORM_EXPENSE_ITEMS.map((item) => {
@@ -133,7 +137,10 @@ export default function TaxFiling() {
     const operatingIncome = grossProfit - totalExpenses;
     const totalIncome = operatingIncome + otherIncome;
 
-    const deductionAmount = filingType === "blue" ? Number(blueDeduction) * 10000 : 0;
+    // A blue-return deduction cannot create a loss.  The 650,000 yen option
+    // is intentionally not exposed until e-Tax/superior electronic-book and
+    // other eligibility evidence are stored in the annual filing record.
+    const deductionAmount = filingType === "blue" ? Math.min(Math.max(0, totalIncome), Number(blueDeduction) * 10000) : 0;
     const taxableIncome = Math.max(0, totalIncome - deductionAmount);
 
     return {
@@ -152,7 +159,7 @@ export default function TaxFiling() {
 
   function handleExport() {
     const lines: string[] = [];
-    lines.push(`${filingType === "blue" ? "青色申告決算書" : "収支内訳書"} ${year}年分`);
+    lines.push(`${filingType === "blue" ? "青色申告決算書" : "収支内訳書"} ${fiscalRange.start}〜${fiscalRange.end}`);
     lines.push("");
     lines.push(`売上(収入)金額,${taxData.salesRevenue}`);
     lines.push(`仕入金額,${taxData.cogs}`);
@@ -184,7 +191,7 @@ export default function TaxFiling() {
           <h1 className="text-xl font-bold">確定申告</h1>
           <div className="flex items-center gap-1">
             <Button variant="outline" size="sm" className="h-7 text-[12px]" onClick={() => setYear(year - 1)}>←</Button>
-            <span className="text-[14px] font-bold px-2">{year}年分</span>
+            <span className="text-[14px] font-bold px-2">{year}年度</span>
             <Button variant="outline" size="sm" className="h-7 text-[12px]" onClick={() => setYear(year + 1)}>→</Button>
           </div>
         </div>
@@ -204,7 +211,6 @@ export default function TaxFiling() {
                 <SelectValue />
               </SelectTrigger>
               <SelectContent>
-                <SelectItem value="65">青色控除 65万円</SelectItem>
                 <SelectItem value="55">青色控除 55万円</SelectItem>
                 <SelectItem value="10">青色控除 10万円</SelectItem>
               </SelectContent>
@@ -231,6 +237,9 @@ export default function TaxFiling() {
               </Link>
             )}
           </p>
+          {filingType === "blue" && (
+            <p className="mt-1 text-blue-600">65万円控除は、期限内申告・複式簿記に加え、e-Taxまたは優良な電子帳簿等の要件確認を年度ごとに記録できるようになるまで選択できません。</p>
+          )}
         </div>
       </div>
 

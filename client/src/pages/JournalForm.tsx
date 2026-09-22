@@ -390,8 +390,8 @@ export default function JournalForm() {
             setSaving(false);
             return;
           }
-          if (isNaN(Number(e.amount)) || Number(e.amount) <= 0) {
-            toast.error(`${i + 1}行目: 金額は正の数値を入力してください`);
+          if (!Number.isSafeInteger(Number(e.amount)) || Number(e.amount) <= 0) {
+            toast.error(`${i + 1}行目: 金額は1円以上の整数を入力してください`);
             setSaving(false);
             return;
           }
@@ -431,6 +431,7 @@ export default function JournalForm() {
             taxRate: e.taxRate,
             taxIncluded: true,
             receiptId,
+            status: "posted",
             createdAt: isEdit ? (pastJournals.find((j) => j.id === journalId)?.createdAt || now) : now,
             updatedAt: now,
           };
@@ -453,15 +454,15 @@ export default function JournalForm() {
           return;
         }
         for (const l of ce.lines) {
-          if (!l.accountId || !l.amount || isNaN(Number(l.amount)) || Number(l.amount) <= 0) {
-            toast.error("すべての行に科目と正の金額を入力してください");
+          if (!l.accountId || !l.amount || !Number.isSafeInteger(Number(l.amount)) || Number(l.amount) <= 0) {
+            toast.error("すべての行に科目と1円以上の整数を入力してください");
             setSaving(false);
             return;
           }
         }
         const debitTotal = debitLines.reduce((s, l) => s + Number(l.amount), 0);
         const creditTotal = creditLines.reduce((s, l) => s + Number(l.amount), 0);
-        if (Math.abs(debitTotal - creditTotal) > 0.01) {
+        if (debitTotal !== creditTotal) {
           toast.error(`借方合計(${debitTotal})と貸方合計(${creditTotal})が一致しません`);
           setSaving(false);
           return;
@@ -502,6 +503,7 @@ export default function JournalForm() {
               paymentMethod: ce.paymentMethod || undefined,
               receiptId,
               tags: [compoundGroupId],
+              status: "posted",
               createdAt: now,
               updatedAt: now,
             };

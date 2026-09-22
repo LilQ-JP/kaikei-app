@@ -26,6 +26,7 @@ import {
   Cell,
 } from "recharts";
 import { Link } from "wouter";
+import { calculateProfitLoss } from "@shared/accounting";
 
 const CHART_COLORS = ["#007aff", "#34c759", "#ff3b30", "#ff9500", "#af52de", "#5ac8fa", "#ff2d55", "#ffcc00"];
 
@@ -77,18 +78,9 @@ export default function Dashboard() {
 
   // Calculate totals
   const stats = useMemo(() => {
-    let income = 0;
-    let expense = 0;
-
-    currentYearJournals.forEach((j) => {
-      const creditAcc = accountMap.get(j.creditAccountId);
-      const debitAcc = accountMap.get(j.debitAccountId);
-      if (creditAcc?.category === "income") income += j.amount;
-      if (debitAcc?.category === "expense") expense += j.amount;
-    });
-
-    return { income, expense, profit: income - expense };
-  }, [currentYearJournals, accountMap]);
+    const profitLoss = calculateProfitLoss(accounts, currentYearJournals);
+    return { income: profitLoss.totalIncome, expense: profitLoss.totalExpense, profit: profitLoss.netIncome };
+  }, [currentYearJournals, accounts]);
 
   // Monthly chart data
   const monthlyData = useMemo(() => {
@@ -96,34 +88,26 @@ export default function Dashboard() {
     for (let m = 1; m <= 12; m++) {
       months[String(m)] = { income: 0, expense: 0 };
     }
-    currentYearJournals.forEach((j) => {
-      const month = String(parseInt(j.date.split("-")[1]));
-      const creditAcc = accountMap.get(j.creditAccountId);
-      const debitAcc = accountMap.get(j.debitAccountId);
-      if (creditAcc?.category === "income") months[month].income += j.amount;
-      if (debitAcc?.category === "expense") months[month].expense += j.amount;
-    });
+    for (let month = 1; month <= 12; month++) {
+      const period = currentYearJournals.filter((journal) => Number(journal.date.slice(5, 7)) === month);
+      const profitLoss = calculateProfitLoss(accounts, period);
+      months[String(month)].income = profitLoss.totalIncome;
+      months[String(month)].expense = profitLoss.totalExpense;
+    }
     return Object.entries(months).map(([m, data]) => ({
       month: `${m}月`,
       収入: data.income,
       支出: data.expense,
     }));
-  }, [currentYearJournals, accountMap]);
+  }, [currentYearJournals, accounts]);
 
   // Expense breakdown
   const expenseBreakdown = useMemo(() => {
-    const breakdown: Record<string, number> = {};
-    currentYearJournals.forEach((j) => {
-      const debitAcc = accountMap.get(j.debitAccountId);
-      if (debitAcc?.category === "expense") {
-        breakdown[debitAcc.name] = (breakdown[debitAcc.name] || 0) + j.amount;
-      }
-    });
-    return Object.entries(breakdown)
-      .map(([name, value]) => ({ name, value }))
+    return calculateProfitLoss(accounts, currentYearJournals).expenseItems
+      .map((item) => ({ name: item.account.name, value: item.amount }))
       .sort((a, b) => b.value - a.value)
       .slice(0, 8);
-  }, [currentYearJournals, accountMap]);
+  }, [currentYearJournals, accounts]);
 
   // Recent journals
   const recentJournals = useMemo(

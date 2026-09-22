@@ -41,6 +41,7 @@ import {
   LineChart,
   Line,
 } from "recharts";
+import { calculateProfitLoss } from "@shared/accounting";
 
 const COLORS = [
   "oklch(0.55 0.22 260)",
@@ -93,39 +94,17 @@ export default function Reports() {
 
   // 勘定科目別集計（経費）
   const expenseByAccount = useMemo(() => {
-    const map = new Map<string, number>();
-    yearJournals.forEach((j) => {
-      const debitAcc = accountMap.get(j.debitAccountId);
-      if (debitAcc?.category === "expense") {
-        map.set(j.debitAccountId, (map.get(j.debitAccountId) || 0) + j.amount);
-      }
-    });
-    return Array.from(map.entries())
-      .map(([id, amount]) => ({
-        id,
-        name: accountMap.get(id)?.name || "不明",
-        amount,
-      }))
+    return calculateProfitLoss(accounts, yearJournals).expenseItems
+      .map(({ account, amount }) => ({ id: account.id, name: account.name, amount }))
       .sort((a, b) => b.amount - a.amount);
-  }, [yearJournals, accountMap]);
+  }, [yearJournals, accounts]);
 
   // 勘定科目別集計（収入）
   const incomeByAccount = useMemo(() => {
-    const map = new Map<string, number>();
-    yearJournals.forEach((j) => {
-      const creditAcc = accountMap.get(j.creditAccountId);
-      if (creditAcc?.category === "income") {
-        map.set(j.creditAccountId, (map.get(j.creditAccountId) || 0) + j.amount);
-      }
-    });
-    return Array.from(map.entries())
-      .map(([id, amount]) => ({
-        id,
-        name: accountMap.get(id)?.name || "不明",
-        amount,
-      }))
+    return calculateProfitLoss(accounts, yearJournals).incomeItems
+      .map(({ account, amount }) => ({ id: account.id, name: account.name, amount }))
       .sort((a, b) => b.amount - a.amount);
-  }, [yearJournals, accountMap]);
+  }, [yearJournals, accounts]);
 
   // 月次集計
   const monthlyData = useMemo(() => {
@@ -136,16 +115,14 @@ export default function Reports() {
       expense: 0,
       profit: 0,
     }));
-    yearJournals.forEach((j) => {
-      const m = new Date(j.date).getMonth();
-      const debitAcc = accountMap.get(j.debitAccountId);
-      const creditAcc = accountMap.get(j.creditAccountId);
-      if (debitAcc?.category === "expense") months[m].expense += j.amount;
-      if (creditAcc?.category === "income") months[m].income += j.amount;
-    });
+    for (let month = 1; month <= 12; month++) {
+      const profitLoss = calculateProfitLoss(accounts, yearJournals.filter((journal) => Number(journal.date.slice(5, 7)) === month));
+      months[month - 1].income = profitLoss.totalIncome;
+      months[month - 1].expense = profitLoss.totalExpense;
+    }
     months.forEach((m) => (m.profit = m.income - m.expense));
     return months;
-  }, [yearJournals, accountMap]);
+  }, [yearJournals, accounts]);
 
   // 決済手段別集計
   const paymentMethodData = useMemo(() => {
@@ -167,16 +144,14 @@ export default function Reports() {
       top5.forEach((acc) => (row[acc.name] = 0));
       return row;
     });
-    yearJournals.forEach((j) => {
-      const debitAcc = accountMap.get(j.debitAccountId);
-      if (debitAcc?.category === "expense") {
-        const accName = debitAcc.name;
-        if (top5.some((a) => a.name === accName)) {
-          const m = new Date(j.date).getMonth();
-          (months[m][accName] as number) += j.amount;
+    for (let month = 1; month <= 12; month++) {
+      const profitLoss = calculateProfitLoss(accounts, yearJournals.filter((journal) => Number(journal.date.slice(5, 7)) === month));
+      for (const item of profitLoss.expenseItems) {
+        if (top5.some((account) => account.name === item.account.name)) {
+          (months[month - 1][item.account.name] as number) += item.amount;
         }
       }
-    });
+    }
     return { data: months, keys: top5.map((a) => a.name) };
   }, [yearJournals, accountMap, expenseByAccount]);
 

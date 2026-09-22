@@ -33,6 +33,7 @@ import {
   putVendor,
   putSettings,
   clearAllData,
+  getApiCsrfToken,
 } from "@/lib/db";
 import { loadAppJson, saveAppJson } from "@/lib/app-storage";
 import { downloadFile } from "@/lib/utils";
@@ -181,7 +182,7 @@ export default function DataManagement() {
 
   async function handleServerBackup() {
     if (!remoteMode) { toast.info("サーバー接続時のみ暗号化バックアップを作成できます"); return; }
-    const response = await fetch("/api/v1/backups", { method: "POST", credentials: "include" });
+    const response = await fetch("/api/v1/backups", { method: "POST", credentials: "include", headers: { "X-CSRF-Token": await getApiCsrfToken() } });
     if (!response.ok) { toast.error("暗号化バックアップに失敗しました"); return; }
     const result = await response.json();
     toast.success(`暗号化バックアップを作成しました（${result.recordCount}件）`);
@@ -192,7 +193,7 @@ export default function DataManagement() {
   async function handleVerifyBackup(name: string) {
     setVerifying(name);
     try {
-      const response = await fetch(`/api/v1/backups/${encodeURIComponent(name)}/verify`, { method: "POST", credentials: "include" });
+      const response = await fetch(`/api/v1/backups/${encodeURIComponent(name)}/verify`, { method: "POST", credentials: "include", headers: { "X-CSRF-Token": await getApiCsrfToken() } });
       const result = await response.json();
       if (!response.ok) throw new Error(result.error || "検証に失敗しました");
       toast.success(`復元検証に成功しました（${result.recordCount}件 / 監査${result.auditEventCount}件）`);

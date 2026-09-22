@@ -9,12 +9,34 @@
 import { openDB, type DBSchema, type IDBPDatabase } from "idb";
 
 const USE_REMOTE_DB = import.meta.env.PROD || import.meta.env.VITE_REMOTE_DB === "true";
+let csrfToken: string | undefined;
+
+async function getCsrfToken(): Promise<string> {
+  if (csrfToken) return csrfToken;
+  const response = await fetch("/api/v1/auth/session", { credentials: "same-origin" });
+  if (!response.ok) throw new Error("ログインが必要です。再度ログインしてください。");
+  const session = await response.json() as { csrfToken?: unknown };
+  if (typeof session.csrfToken !== "string" || session.csrfToken.length < 20) {
+    throw new Error("安全なセッションを確認できません。再度ログインしてください。");
+  }
+  csrfToken = session.csrfToken;
+  return csrfToken;
+}
+
+/** For the few non-CRUD API calls (backup/restore verification). */
+export async function getApiCsrfToken(): Promise<string> {
+  return getCsrfToken();
+}
 
 async function remoteRequest<T>(path: string, init?: RequestInit): Promise<T> {
+  const method = (init?.method || "GET").toUpperCase();
+  const headers = new Headers(init?.headers);
+  headers.set("Content-Type", "application/json");
+  if (!["GET", "HEAD", "OPTIONS"].includes(method)) headers.set("X-CSRF-Token", await getCsrfToken());
   const response = await fetch(`/api/v1${path}`, {
     ...init,
     credentials: "same-origin",
-    headers: { "Content-Type": "application/json", ...(init?.headers || {}) },
+    headers,
   });
   if (!response.ok) {
     const payload = await response.json().catch(() => null) as { error?: string } | null;
@@ -58,6 +80,10 @@ export interface JournalEntry {
   sourceDocumentId?: string;
   sourceKey?: string;
   tags?: string[];
+  /** 下書きだけを直接編集・削除でき、確定後の訂正は反対仕訳で残す。 */
+  status?: "draft" | "posted" | "reversed";
+  reversalOf?: string;
+  revision?: number;
   createdAt: string;
   updatedAt: string;
 }

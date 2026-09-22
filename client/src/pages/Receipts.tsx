@@ -54,6 +54,8 @@ function isPdfData(data: string): boolean {
   return data.startsWith("data:application/pdf");
 }
 
+const ACCEPTED_DOCUMENT_TYPES = new Set(["image/jpeg", "image/png", "image/heic", "application/pdf"]);
+
 export default function Receipts() {
   const [receipts, setReceipts] = useState<Receipt[]>([]);
   const [journals, setJournals] = useState<JournalEntry[]>([]);
@@ -116,8 +118,8 @@ export default function Receipts() {
     if (!file) return;
     const isImage = file.type.startsWith("image/");
     const isPdf = file.type === "application/pdf";
-    if (!isImage && !isPdf) {
-      toast.error("画像またはPDFファイルを選択してください");
+    if ((!isImage && !isPdf) || !ACCEPTED_DOCUMENT_TYPES.has(file.type)) {
+      toast.error("JPEG・PNG・HEIC画像またはPDFを選択してください（SVG等は保存できません）");
       return;
     }
     if (file.size > 10 * 1024 * 1024) {
@@ -234,13 +236,13 @@ export default function Receipts() {
                   >
                     <Camera className="h-8 w-8 text-muted-foreground/50 mb-2" />
                     <p className="text-[12px] text-muted-foreground">クリックして画像/PDFを選択</p>
-                    <p className="text-[11px] text-muted-foreground/60">JPG, PNG, PDF (10MB以下)</p>
+                    <p className="text-[11px] text-muted-foreground/60">JPG, PNG, HEIC, PDF (10MB以下)</p>
                   </div>
                 )}
                 <input
                   ref={fileInputRef}
                   type="file"
-                  accept="image/*,application/pdf"
+                  accept="image/jpeg,image/png,image/heic,application/pdf"
                   onChange={handleFileChange}
                   className="hidden"
                 />
@@ -417,6 +419,7 @@ export default function Receipts() {
                   src={previewData.data}
                   title="PDF Preview"
                   className="w-full h-full"
+                  sandbox=""
                 />
               </div>
             ) : (

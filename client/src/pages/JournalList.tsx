@@ -32,12 +32,13 @@ import {
   getAllJournals,
   deleteJournal,
   getReceipt,
+  putJournal,
   type AccountItem,
   type JournalEntry,
   type Receipt,
 } from "@/lib/db";
 import { formatYen, journalsToCSV, downloadFile } from "@/lib/utils";
-import { Download, Plus, Search, Trash2, Camera, Pencil, CreditCard, FileText } from "lucide-react";
+import { Download, Plus, Search, Trash2, Camera, Pencil, CreditCard, FileText, RotateCcw } from "lucide-react";
 import { useEffect, useMemo, useState, useCallback } from "react";
 import { Link } from "wouter";
 import { toast } from "sonner";
@@ -103,6 +104,25 @@ export default function JournalList() {
   async function handleDelete(id: string) {
     await deleteJournal(id);
     toast.success("仕訳を削除しました");
+    load();
+  }
+
+  async function handleReverse(entry: JournalEntry) {
+    const now = new Date().toISOString();
+    await putJournal({
+      ...entry,
+      id: crypto.randomUUID(),
+      debitAccountId: entry.creditAccountId,
+      creditAccountId: entry.debitAccountId,
+      description: `訂正: ${entry.description || "元仕訳"}`,
+      receiptId: undefined,
+      status: "posted",
+      reversalOf: entry.id,
+      revision: (entry.revision || 0) + 1,
+      createdAt: now,
+      updatedAt: now,
+    });
+    toast.success("反対仕訳を作成しました。元の仕訳は監査証跡として残ります。");
     load();
   }
 
@@ -246,36 +266,47 @@ export default function JournalList() {
                             <span className="text-muted-foreground/30">—</span>
                           )}
                         </td>
-                        <td className="px-2 py-2.5">
-                          <Link href={`/journals/edit/${j.id}`}>
-                            <Button variant="ghost" size="sm" className="h-7 w-7 p-0 text-muted-foreground hover:text-primary">
-                              <Pencil className="h-3.5 w-3.5" />
-                            </Button>
-                          </Link>
-                        </td>
-                        <td className="px-2 py-2.5">
-                          <AlertDialog>
-                            <AlertDialogTrigger asChild>
-                              <Button variant="ghost" size="sm" className="h-7 w-7 p-0 text-muted-foreground hover:text-destructive">
-                                <Trash2 className="h-3.5 w-3.5" />
-                              </Button>
-                            </AlertDialogTrigger>
-                            <AlertDialogContent>
-                              <AlertDialogHeader>
-                                <AlertDialogTitle>仕訳を削除</AlertDialogTitle>
-                                <AlertDialogDescription>
-                                  この仕訳を削除しますか？この操作は取り消せません。
-                                </AlertDialogDescription>
-                              </AlertDialogHeader>
-                              <AlertDialogFooter>
-                                <AlertDialogCancel>キャンセル</AlertDialogCancel>
-                                <AlertDialogAction onClick={() => handleDelete(j.id)}>
-                                  削除
-                                </AlertDialogAction>
-                              </AlertDialogFooter>
-                            </AlertDialogContent>
-                          </AlertDialog>
-                        </td>
+                        {j.status === "draft" ? (
+                          <>
+                            <td className="px-2 py-2.5">
+                              <Link href={`/journals/edit/${j.id}`}>
+                                <Button variant="ghost" size="sm" className="h-7 w-7 p-0 text-muted-foreground hover:text-primary" aria-label="下書きを編集">
+                                  <Pencil className="h-3.5 w-3.5" />
+                                </Button>
+                              </Link>
+                            </td>
+                            <td className="px-2 py-2.5">
+                              <AlertDialog>
+                                <AlertDialogTrigger asChild>
+                                  <Button variant="ghost" size="sm" className="h-7 w-7 p-0 text-muted-foreground hover:text-destructive" aria-label="下書きを削除">
+                                    <Trash2 className="h-3.5 w-3.5" />
+                                  </Button>
+                                </AlertDialogTrigger>
+                                <AlertDialogContent>
+                                  <AlertDialogHeader><AlertDialogTitle>下書きを削除</AlertDialogTitle><AlertDialogDescription>この下書きを削除しますか？</AlertDialogDescription></AlertDialogHeader>
+                                  <AlertDialogFooter><AlertDialogCancel>キャンセル</AlertDialogCancel><AlertDialogAction onClick={() => handleDelete(j.id)}>削除</AlertDialogAction></AlertDialogFooter>
+                                </AlertDialogContent>
+                              </AlertDialog>
+                            </td>
+                          </>
+                        ) : (
+                          <>
+                            <td className="px-2 py-2.5 text-center text-[11px] text-muted-foreground">確定</td>
+                            <td className="px-2 py-2.5">
+                              <AlertDialog>
+                                <AlertDialogTrigger asChild>
+                                  <Button variant="ghost" size="sm" className="h-7 w-7 p-0 text-muted-foreground hover:text-primary" aria-label="反対仕訳を作成">
+                                    <RotateCcw className="h-3.5 w-3.5" />
+                                  </Button>
+                                </AlertDialogTrigger>
+                                <AlertDialogContent>
+                                  <AlertDialogHeader><AlertDialogTitle>反対仕訳で訂正</AlertDialogTitle><AlertDialogDescription>元の仕訳は削除せず、同額の反対仕訳を作成します。訂正後の内容は続けて新規仕訳で入力してください。</AlertDialogDescription></AlertDialogHeader>
+                                  <AlertDialogFooter><AlertDialogCancel>キャンセル</AlertDialogCancel><AlertDialogAction onClick={() => handleReverse(j)}>反対仕訳を作成</AlertDialogAction></AlertDialogFooter>
+                                </AlertDialogContent>
+                              </AlertDialog>
+                            </td>
+                          </>
+                        )}
                       </tr>
                     );
                   })}
@@ -302,6 +333,7 @@ export default function JournalList() {
                     src={previewReceipt.imageData}
                     title="PDF Preview"
                     className="w-full h-full"
+                    sandbox=""
                   />
                 </div>
               ) : (
