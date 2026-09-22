@@ -11,7 +11,7 @@ tailscale serve --https=443 http://127.0.0.1:4175
 tailscale serve status
 ```
 
-データ本体は `C:\ProgramData\LilQKaikei` に置き、Google Drive同期フォルダにはSQLite本体を置きません。暗号化バックアップをGoogle Driveへコピーする場合は、バックアップ先を別途同期対象として設定します。
+データ本体は `C:\ProgramData\LilQKaikei` に置き、Google Drive同期フォルダにはSQLite本体を置きません。暗号化バックアップをGoogle Driveへコピーする場合は、バックアップ先を別途同期対象として設定します。`dist` はサーバー依存関係を同梱した単体ビルドなので、Windowsの配置先で `pnpm install` を実行する必要はありません。
 
 外部AIを有効にする場合は、APIキーをソースコードやGitへ保存せず、Lenovoのサービス環境変数へ設定します。キー未設定時は、アプリ内のローカル仕訳候補（過去履歴・キーワード）のみを使い、仕訳を自動確定しません。
 

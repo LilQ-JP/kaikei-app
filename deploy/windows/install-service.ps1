@@ -10,7 +10,10 @@ $serviceName = "LilQKaikei"
 $source = Split-Path -Parent $PSScriptRoot | Split-Path -Parent
 
 New-Item -ItemType Directory -Force -Path $InstallRoot, $DataRoot | Out-Null
-Copy-Item -Path (Join-Path $source "dist"), (Join-Path $source "package.json"), (Join-Path $source "pnpm-lock.yaml") -Destination $InstallRoot -Recurse -Force
+# dist/index.js is bundled with its server dependencies.  Installing a task
+# which points at Program Files without node_modules makes it fail after a
+# reboot, so only the self-contained build output is deployed.
+Copy-Item -Path (Join-Path $source "dist") -Destination $InstallRoot -Recurse -Force
 
 $launcher = Join-Path $InstallRoot "launcher.mjs"
 @(
