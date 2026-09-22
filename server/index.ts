@@ -100,8 +100,10 @@ async function startServer() {
 
   const port = process.env.PORT || 3000;
 
-  server.listen(port, () => {
-    console.log(`Server running on http://localhost:${port}/`);
+  // Tailscale Serve is the only remote entry point.  Do not expose the
+  // accounting API directly on the LAN or Tailnet interface.
+  server.listen(Number(port), "127.0.0.1", () => {
+    console.log(`Server running on http://127.0.0.1:${port}/`);
   });
 }
 
