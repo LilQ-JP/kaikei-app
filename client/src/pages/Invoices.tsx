@@ -55,7 +55,7 @@ import {
   INVOICE_STATUS_LABELS,
   INVOICE_STATUS_COLORS,
 } from "@/lib/utils";
-import { Plus, Trash2, FileText, Download, Eye, MoreHorizontal } from "lucide-react";
+import { Plus, Trash2, FileText, Download, Eye, MoreHorizontal, Pencil } from "lucide-react";
 import { useEffect, useState, useCallback, useRef } from "react";
 import { toast } from "sonner";
 
@@ -68,6 +68,7 @@ export default function Invoices() {
   const [profile, setProfile] = useState<BusinessProfile | undefined>();
   const [loading, setLoading] = useState(true);
   const [dialogOpen, setDialogOpen] = useState(false);
+  const [editingInvoice, setEditingInvoice] = useState<Invoice | null>(null);
   const [previewingInvoice, setPreviewingInvoice] = useState<Invoice | null>(null);
   const previewFrameRef = useRef<HTMLIFrameElement>(null);
 
@@ -146,8 +147,8 @@ export default function Invoices() {
 
     const now = new Date().toISOString();
     const invoice: Invoice = {
-      id: crypto.randomUUID(),
-      invoiceNumber: generateInvoiceNumber(),
+      id: editingInvoice?.id || crypto.randomUUID(),
+      invoiceNumber: editingInvoice?.invoiceNumber || generateInvoiceNumber(),
       clientName,
       clientPostalCode,
       clientAddress,
@@ -160,20 +161,21 @@ export default function Invoices() {
       taxAmount,
       total,
       taxBreakdown,
-      status: "draft",
+      status: editingInvoice?.status || "draft",
       notes,
       bankName,
       bankBranch,
       bankAccountType,
       bankAccountNumber,
       bankAccountName,
-      createdAt: now,
+      createdAt: editingInvoice?.createdAt || now,
       updatedAt: now,
     };
 
     await putInvoice(invoice);
-    toast.success("請求書を作成しました");
+    toast.success(editingInvoice ? "下書き請求書を更新しました" : "請求書を作成しました");
     setDialogOpen(false);
+    setEditingInvoice(null);
     resetForm();
     load();
   }
@@ -197,6 +199,29 @@ export default function Invoices() {
     setBankAccountType(prof.bankAccountType || "普通");
     setBankAccountNumber(prof.bankAccountNumber || "");
     setBankAccountName(prof.bankAccountName || "");
+  }
+
+  function handleEdit(invoice: Invoice) {
+    if (invoice.status !== "draft") {
+      toast.error("下書き以外の請求書は編集できません。");
+      return;
+    }
+    setEditingInvoice(invoice);
+    setClientName(invoice.clientName);
+    setClientPostalCode(invoice.clientPostalCode || "");
+    setClientAddress(invoice.clientAddress || "");
+    setClientBuilding(invoice.clientBuilding || "");
+    setIssueDate(invoice.issueDate);
+    setDueDate(invoice.dueDate || "");
+    setItems(invoice.items.map((item) => ({ ...item, taxRate: item.taxRate ?? invoice.taxRate })));
+    setTaxRate(invoice.taxRate);
+    setNotes(invoice.notes || "");
+    setBankName(invoice.bankName || "");
+    setBankBranch(invoice.bankBranch || "");
+    setBankAccountType(invoice.bankAccountType || "普通");
+    setBankAccountNumber(invoice.bankAccountNumber || "");
+    setBankAccountName(invoice.bankAccountName || "");
+    setDialogOpen(true);
   }
 
   async function updateStatus(id: string, status: Invoice["status"]) {
@@ -236,16 +261,16 @@ export default function Invoices() {
     <div className="p-4 lg:p-6">
       <div className="flex items-center justify-between mb-4">
         <h1 className="text-xl font-bold">請求書</h1>
-        <Dialog open={dialogOpen} onOpenChange={setDialogOpen}>
+        <Dialog open={dialogOpen} onOpenChange={(open) => { setDialogOpen(open); if (!open) setEditingInvoice(null); }}>
           <DialogTrigger asChild>
-            <Button size="sm">
+            <Button size="sm" onClick={() => { setEditingInvoice(null); resetForm(); }}>
               <Plus className="h-4 w-4 mr-1" />
               新規作成
             </Button>
           </DialogTrigger>
           <DialogContent className="max-w-2xl max-h-[90vh] overflow-y-auto">
             <DialogHeader>
-              <DialogTitle>請求書を作成</DialogTitle>
+              <DialogTitle>{editingInvoice ? "下書き請求書を編集" : "請求書を作成"}</DialogTitle>
             </DialogHeader>
             <div className="space-y-4 mt-2">
               <div className="grid grid-cols-2 gap-4">
@@ -428,7 +453,7 @@ export default function Invoices() {
                 <Button variant="outline" onClick={() => setDialogOpen(false)}>
                   キャンセル
                 </Button>
-                <Button onClick={handleSave}>作成</Button>
+                <Button onClick={handleSave}>{editingInvoice ? "更新" : "作成"}</Button>
               </div>
             </div>
           </DialogContent>
@@ -494,6 +519,12 @@ export default function Invoices() {
                           </Button>
                         </DropdownMenuTrigger>
                         <DropdownMenuContent align="end">
+                          {inv.status === "draft" && (
+                            <DropdownMenuItem onClick={() => handleEdit(inv)}>
+                              <Pencil className="h-3.5 w-3.5 mr-2" />
+                              下書きを編集
+                            </DropdownMenuItem>
+                          )}
                           <DropdownMenuItem onClick={() => handlePreview(inv)}>
                             <Eye className="h-3.5 w-3.5 mr-2" />
                             プレビュー
