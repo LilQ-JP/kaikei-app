@@ -114,7 +114,11 @@ export interface BusinessProfile {
   id: string;
   businessName: string;
   ownerName: string;
+  /** 既存データとの互換用に、住所を1行へ結合した値も保持する。 */
   address?: string;
+  postalCode?: string;
+  addressLine?: string;
+  building?: string;
   phone?: string;
   email?: string;
   taxId?: string; // 適格請求書発行事業者番号

@@ -106,7 +106,7 @@ export function generateInvoiceHTML(invoice: Invoice, profile?: BusinessProfile)
         <div style="font-size:11px;color:#86868b;font-weight:600;text-transform:uppercase;letter-spacing:0.05em;margin-bottom:8px;padding-bottom:6px;border-bottom:2px solid #1d1d1f;text-align:left;">発行者</div>
         ${profile?.businessName ? `<div style="font-size:15px;font-weight:700;margin-bottom:4px;text-align:left;">${escapeHtml(profile.businessName)}</div>` : ""}
         ${profile?.ownerName ? `<div style="font-size:12px;color:#6e6e73;text-align:left;">${escapeHtml(profile.ownerName)}</div>` : ""}
-        ${profile?.address ? `<div style="font-size:12px;color:#6e6e73;text-align:left;">${escapeHtml(profile.address)}</div>` : ""}
+        ${formatBusinessAddress(profile)}
         ${profile?.phone ? `<div style="font-size:12px;color:#6e6e73;text-align:left;">TEL: ${escapeHtml(profile.phone)}</div>` : ""}
         ${profile?.email ? `<div style="font-size:12px;color:#6e6e73;text-align:left;">${escapeHtml(profile.email)}</div>` : ""}
         ${profile?.taxId ? `<div style="font-size:11px;color:#86868b;margin-top:6px;text-align:left;">登録番号: ${escapeHtml(profile.taxId)}</div>` : ""}
@@ -183,6 +183,19 @@ function formatInvoiceAddress(invoice: Invoice): string {
     invoice.clientBuilding || "",
   ].filter(Boolean);
   return lines.length ? `<div style="font-size:12px;color:#6e6e73;white-space:pre-line;">${lines.map(escapeHtml).join("<br />")}</div>` : "";
+}
+
+function formatBusinessAddress(profile?: BusinessProfile): string {
+  if (!profile) return "";
+  const lines = [
+    profile.postalCode ? `〒${profile.postalCode}` : "",
+    profile.addressLine || "",
+    profile.building || "",
+  ].filter(Boolean);
+  const address = lines.length ? lines : profile.address ? [profile.address] : [];
+  return address.length
+    ? `<div style="font-size:12px;color:#6e6e73;text-align:left;white-space:pre-line;">${address.map(escapeHtml).join("<br />")}</div>`
+    : "";
 }
 
 function formatBankInfo(invoice: Invoice): string {

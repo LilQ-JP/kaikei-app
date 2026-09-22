@@ -28,7 +28,9 @@ export default function Profile() {
 
   const [businessName, setBusinessName] = useState("");
   const [representativeName, setRepresentativeName] = useState("");
-  const [address, setAddress] = useState("");
+  const [postalCode, setPostalCode] = useState("");
+  const [addressLine, setAddressLine] = useState("");
+  const [building, setBuilding] = useState("");
   const [phone, setPhone] = useState("");
   const [email, setEmail] = useState("");
   const [taxId, setTaxId] = useState("");
@@ -49,7 +51,10 @@ export default function Profile() {
       if (p) {
         setBusinessName(p.businessName || "");
         setRepresentativeName(p.ownerName || "");
-        setAddress(p.address || "");
+        setPostalCode(p.postalCode || "");
+        // 旧版の一括住所は、編集時に失われないよう住所欄へ引き継ぐ。
+        setAddressLine(p.addressLine || p.address || "");
+        setBuilding(p.building || "");
         setPhone(p.phone || "");
         setEmail(p.email || "");
         setTaxId(p.taxId || "");
@@ -99,7 +104,11 @@ export default function Profile() {
         id: "default",
         businessName,
         ownerName: representativeName,
-        address,
+        // 税務帳票など既存の address 参照先との互換性を維持する。
+        address: [postalCode ? `〒${postalCode}` : "", addressLine, building].filter(Boolean).join(" "),
+        postalCode,
+        addressLine,
+        building,
         phone,
         email,
         taxId,
@@ -228,9 +237,19 @@ export default function Profile() {
                 <Input value={representativeName} onChange={(e) => setRepresentativeName(e.target.value)} className="mt-1 text-[13px]" placeholder="山田 太郎" />
               </div>
             </div>
+            <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
+              <div>
+                <Label className="text-[12px] font-semibold">郵便番号</Label>
+                <Input value={postalCode} onChange={(e) => setPostalCode(e.target.value)} className="mt-1 text-[13px] font-mono" placeholder="123-4567" inputMode="numeric" />
+              </div>
+              <div className="sm:col-span-2">
+                <Label className="text-[12px] font-semibold">住所</Label>
+                <Input value={addressLine} onChange={(e) => setAddressLine(e.target.value)} className="mt-1 text-[13px]" placeholder="東京都渋谷区..." />
+              </div>
+            </div>
             <div>
-              <Label className="text-[12px] font-semibold">住所</Label>
-              <Input value={address} onChange={(e) => setAddress(e.target.value)} className="mt-1 text-[13px]" placeholder="東京都渋谷区..." />
+              <Label className="text-[12px] font-semibold">建物名・部屋番号</Label>
+              <Input value={building} onChange={(e) => setBuilding(e.target.value)} className="mt-1 text-[13px]" placeholder="○○マンション 101" />
             </div>
             <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
               <div>
