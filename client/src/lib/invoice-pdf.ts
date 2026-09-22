@@ -2,8 +2,7 @@
  * Invoice PDF Generator
  * macOS Ledger Design — フリーランス会計
  *
- * ブラウザ内で請求書HTMLを生成し、印刷APIでPDF化する。
- * 外部ライブラリ不要。
+ * ブラウザ内で請求書HTMLを生成し、A4 1ページのPDFとして保存する。
  */
 
 import { type Invoice, type BusinessProfile } from "./db";
@@ -27,11 +26,11 @@ export function generateInvoiceHTML(invoice: Invoice, profile?: BusinessProfile)
     .map(
       (item, i) => `
     <tr>
-      <td style="padding:10px 12px;border-bottom:1px solid #e5e5e5;font-size:13px;">${i + 1}</td>
-      <td style="padding:10px 12px;border-bottom:1px solid #e5e5e5;font-size:13px;">${escapeHtml(item.description)}</td>
-      <td style="padding:10px 12px;border-bottom:1px solid #e5e5e5;font-size:13px;text-align:right;font-family:'JetBrains Mono',monospace;">${item.quantity}</td>
-      <td style="padding:10px 12px;border-bottom:1px solid #e5e5e5;font-size:13px;text-align:right;font-family:'JetBrains Mono',monospace;">${formatYen(item.unitPrice)}</td>
-      <td style="padding:10px 12px;border-bottom:1px solid #e5e5e5;font-size:13px;text-align:right;font-weight:600;font-family:'JetBrains Mono',monospace;">${formatYen(item.amount)}</td>
+      <td style="padding:7px 10px;border-bottom:1px solid #e5e5e5;font-size:12px;">${i + 1}</td>
+      <td style="padding:7px 10px;border-bottom:1px solid #e5e5e5;font-size:12px;">${escapeHtml(item.description)}</td>
+      <td style="padding:7px 10px;border-bottom:1px solid #e5e5e5;font-size:12px;text-align:right;font-family:'JetBrains Mono',monospace;">${item.quantity}</td>
+      <td style="padding:7px 10px;border-bottom:1px solid #e5e5e5;font-size:12px;text-align:right;font-family:'JetBrains Mono',monospace;">${formatYen(item.unitPrice)}</td>
+      <td style="padding:7px 10px;border-bottom:1px solid #e5e5e5;font-size:12px;text-align:right;font-weight:600;font-family:'JetBrains Mono',monospace;">${formatYen(item.amount)}</td>
     </tr>`
     )
     .join("");
@@ -61,7 +60,7 @@ export function generateInvoiceHTML(invoice: Invoice, profile?: BusinessProfile)
     .page {
       max-width: 210mm;
       margin: 0 auto;
-      padding: 40px;
+      padding: 28px;
     }
     .mono { font-family: 'JetBrains Mono', monospace; }
   </style>
@@ -69,7 +68,7 @@ export function generateInvoiceHTML(invoice: Invoice, profile?: BusinessProfile)
 <body>
   <div class="page">
     <!-- Header -->
-    <div style="display:flex;justify-content:space-between;align-items:flex-start;margin-bottom:32px;">
+    <div style="display:flex;justify-content:space-between;align-items:flex-start;margin-bottom:20px;">
       <div style="display:flex;align-items:center;gap:16px;">
         ${profile?.logoData ? `<img src="${profile.logoData}" style="max-height:48px;max-width:120px;object-fit:contain;" alt="Logo" />` : ""}
         <div>
@@ -84,7 +83,7 @@ export function generateInvoiceHTML(invoice: Invoice, profile?: BusinessProfile)
     </div>
 
     <!-- Dates -->
-    <div style="display:flex;gap:32px;margin-bottom:28px;">
+    <div style="display:flex;gap:32px;margin-bottom:18px;">
       <div>
         <div style="font-size:11px;color:#86868b;font-weight:600;text-transform:uppercase;letter-spacing:0.05em;margin-bottom:4px;">発行日</div>
         <div style="font-size:13px;font-weight:600;">${formatDate(invoice.issueDate)}</div>
@@ -97,7 +96,7 @@ export function generateInvoiceHTML(invoice: Invoice, profile?: BusinessProfile)
     </div>
 
     <!-- From / To -->
-    <div style="display:flex;gap:40px;margin-bottom:32px;">
+    <div style="display:flex;gap:32px;margin-bottom:20px;">
       <div style="flex:1;">
         <div style="font-size:11px;color:#86868b;font-weight:600;text-transform:uppercase;letter-spacing:0.05em;margin-bottom:8px;padding-bottom:6px;border-bottom:2px solid #1d1d1f;">請求先</div>
         <div style="font-size:16px;font-weight:700;margin-bottom:4px;">${escapeHtml(invoice.clientName)} 御中</div>
@@ -115,7 +114,7 @@ export function generateInvoiceHTML(invoice: Invoice, profile?: BusinessProfile)
     </div>
 
     <!-- Total highlight -->
-    <div style="background:#f5f5f7;border-radius:8px;padding:16px 20px;margin-bottom:28px;display:flex;justify-content:space-between;align-items:center;">
+    <div style="background:#f5f5f7;border-radius:8px;padding:12px 16px;margin-bottom:16px;display:flex;justify-content:space-between;align-items:center;">
       <div style="font-size:13px;font-weight:600;color:#6e6e73;">ご請求金額</div>
       <div style="font-size:24px;font-weight:700;letter-spacing:-0.02em;" class="mono">${formatYen(invoice.total)}</div>
     </div>
@@ -137,7 +136,7 @@ export function generateInvoiceHTML(invoice: Invoice, profile?: BusinessProfile)
     </table>
 
     <!-- Totals -->
-    <div style="display:flex;justify-content:flex-end;margin-bottom:28px;">
+    <div style="display:flex;justify-content:flex-end;margin-bottom:16px;">
       <div style="width:260px;">
         <div style="display:flex;justify-content:space-between;padding:6px 0;font-size:13px;">
           <span style="color:#6e6e73;">小計</span>
@@ -156,9 +155,9 @@ export function generateInvoiceHTML(invoice: Invoice, profile?: BusinessProfile)
 
     <!-- Bank info -->
     ${formatBankInfo(invoice) ? `
-    <div style="background:#f5f5f7;border-radius:8px;padding:16px 20px;margin-bottom:16px;">
+    <div style="background:#f5f5f7;border-radius:8px;padding:12px 16px;margin-bottom:12px;">
       <div style="font-size:11px;font-weight:700;color:#86868b;text-transform:uppercase;letter-spacing:0.05em;margin-bottom:8px;">振込先</div>
-      <div style="font-size:13px;font-weight:600;white-space:pre-line;">${escapeHtml(formatBankInfo(invoice))}</div>
+      ${formatBankInfo(invoice)}
     </div>` : ""}
 
     <!-- Notes -->
@@ -169,7 +168,7 @@ export function generateInvoiceHTML(invoice: Invoice, profile?: BusinessProfile)
     </div>` : ""}
 
     <!-- Footer -->
-    <div style="margin-top:40px;padding-top:16px;border-top:1px solid #e5e5e5;text-align:center;">
+    <div style="margin-top:20px;padding-top:10px;border-top:1px solid #e5e5e5;text-align:center;">
       <div style="font-size:10px;color:#86868b;">この請求書はフリーランス会計で作成されました</div>
     </div>
   </div>
@@ -187,12 +186,26 @@ function formatInvoiceAddress(invoice: Invoice): string {
 }
 
 function formatBankInfo(invoice: Invoice): string {
-  const structured = [
-    [invoice.bankName, invoice.bankBranch].filter(Boolean).join(" "),
-    [invoice.bankAccountType, invoice.bankAccountNumber].filter(Boolean).join(" "),
-    invoice.bankAccountName || "",
-  ].filter(Boolean).join("\n");
-  return structured || invoice.bankInfo || "";
+  const fields = [
+    ["銀行名", invoice.bankName],
+    ["支店名", invoice.bankBranch],
+    ["口座種別", invoice.bankAccountType],
+    ["口座番号", invoice.bankAccountNumber],
+    ["口座名義", invoice.bankAccountName],
+  ].filter(([, value]) => Boolean(value));
+
+  if (fields.length) {
+    return `<div style="display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:8px 20px;">
+      ${fields.map(([label, value], index) => `<div style="${index === fields.length - 1 && label === "口座名義" ? "grid-column:1 / -1;" : ""}">
+        <div style="font-size:10px;color:#86868b;margin-bottom:2px;">${label}</div>
+        <div style="font-size:12px;font-weight:600;word-break:break-all;">${escapeHtml(value || "")}</div>
+      </div>`).join("")}
+    </div>`;
+  }
+
+  return invoice.bankInfo
+    ? `<div style="font-size:12px;font-weight:600;white-space:pre-line;word-break:break-all;">${escapeHtml(invoice.bankInfo)}</div>`
+    : "";
 }
 
 /** Download a real PDF file, without relying on the browser print dialog. */
@@ -203,17 +216,17 @@ export async function downloadInvoicePDF(frame: HTMLIFrameElement, invoice: Invo
   const canvas = await html2canvas(page, { backgroundColor: "#ffffff", scale: 2, useCORS: false, logging: false });
   const pdf = new jsPDF({ orientation: "p", unit: "mm", format: "a4", compress: true });
   const imageData = canvas.toDataURL("image/jpeg", 0.95);
-  const imageHeight = (canvas.height * 210) / canvas.width;
-  let remainingHeight = imageHeight;
-  let y = 0;
-  while (remainingHeight > 0) {
-    pdf.addImage(imageData, "JPEG", 0, y, 210, imageHeight, undefined, "FAST");
-    remainingHeight -= 297;
-    if (remainingHeight > 0) {
-      pdf.addPage();
-      y -= 297;
-    }
-  }
+  // A4の余白を確保しつつ、常に1ページへ縮小して保存する。
+  // 多数明細でも2ページ目に切り取られず、全文を確認できる。
+  const margin = 10;
+  const usableWidth = 210 - margin * 2;
+  const usableHeight = 297 - margin * 2;
+  const sourceRatio = canvas.width / canvas.height;
+  const targetRatio = usableWidth / usableHeight;
+  const [width, height] = sourceRatio > targetRatio
+    ? [usableWidth, usableWidth / sourceRatio]
+    : [usableHeight * sourceRatio, usableHeight];
+  pdf.addImage(imageData, "JPEG", margin + (usableWidth - width) / 2, margin + (usableHeight - height) / 2, width, height, undefined, "FAST");
   pdf.save(`${invoice.invoiceNumber}.pdf`);
 }
 
