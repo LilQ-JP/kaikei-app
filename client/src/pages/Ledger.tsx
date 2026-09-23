@@ -19,7 +19,7 @@ import {
 } from "@/lib/db";
 import { formatYen, CATEGORY_LABELS } from "@/lib/utils";
 import { useEffect, useMemo, useState } from "react";
-import { isDebitNormal } from "@shared/accounting";
+import { isDebitNormal, journalLines } from "@shared/accounting";
 
 export default function Ledger() {
   const [journals, setJournals] = useState<JournalEntry[]>([]);
@@ -50,24 +50,19 @@ export default function Ledger() {
     if (!selectedAccountId) return [];
 
     const entries = journals
-      .filter(
-        (j) =>
-          j.debitAccountId === selectedAccountId ||
-          j.creditAccountId === selectedAccountId
-      )
-      .sort((a, b) => a.date.localeCompare(b.date) || a.createdAt.localeCompare(b.createdAt));
+      .map((journal) => ({ journal, lines: journalLines(journal) }))
+      .filter(({ lines }) => lines.some((line) => line.accountId === selectedAccountId))
+      .map(({ journal, lines }) => ({ journal, lines, ownLines: lines.filter((line) => line.accountId === selectedAccountId) }))
+      .sort((a, b) => a.journal.date.localeCompare(b.journal.date) || a.journal.createdAt.localeCompare(b.journal.createdAt));
 
     let balance = 0;
     const account = accountMap.get(selectedAccountId);
     const debitNormal = account ? isDebitNormal(account) : true;
 
-    return entries.map((j) => {
-      const isDebit = j.debitAccountId === selectedAccountId;
-      const debitAmount = isDebit ? j.amount : 0;
-      const creditAmount = !isDebit ? j.amount : 0;
-      const counterAccount = isDebit
-        ? accountMap.get(j.creditAccountId)
-        : accountMap.get(j.debitAccountId);
+    return entries.map(({ journal, lines, ownLines }) => {
+      const debitAmount = ownLines.filter((line) => line.side === "debit").reduce((sum, line) => sum + line.amount, 0);
+      const creditAmount = ownLines.filter((line) => line.side === "credit").reduce((sum, line) => sum + line.amount, 0);
+      const counterAccountName = lines.filter((line) => line.accountId !== selectedAccountId).map((line) => accountMap.get(line.accountId)?.name || "不明科目").join("・") || "—";
 
       if (debitNormal) {
         balance += debitAmount - creditAmount;
@@ -76,10 +71,10 @@ export default function Ledger() {
       }
 
       return {
-        id: j.id,
-        date: j.date,
-        description: j.description,
-        counterAccountName: counterAccount?.name || "—",
+        id: journal.id,
+        date: journal.date,
+        description: journal.description,
+        counterAccountName,
         debitAmount,
         creditAmount,
         balance,

@@ -2,7 +2,7 @@ import express from "express";
 import { createServer } from "http";
 import path from "path";
 import { fileURLToPath } from "url";
-import { assertCollection, clearRecords, createEncryptedBackup, createSession, deleteRecord, deleteSession, getRecord, getSession, hasAdminUser, listEncryptedBackups, listRecords, putRecord, putRecordsAtomic, setAdminPassword, verifyAdminPassword, verifyEncryptedBackup } from "./storage";
+import { assertCollection, clearRecords, createEncryptedBackup, createSession, deleteRecord, deleteSession, getRecord, getSession, hasAdminUser, listEncryptedBackups, listRecords, postInvoiceToLedger, putRecord, putRecordsAtomic, recordInvoicePayment, setAdminPassword, verifyAdminPassword, verifyEncryptedBackup } from "./storage";
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -82,6 +82,15 @@ async function startServer() {
   app.post("/api/v1/backups/:name/verify", requireSession, requireCsrf, (req, res) => {
     try { return res.json(verifyEncryptedBackup(req.params.name)); }
     catch (error) { return res.status(400).json({ error: error instanceof Error ? error.message : "バックアップ検証に失敗しました" }); }
+  });
+
+  app.post("/api/v1/invoices/:id/issue", requireSession, requireCsrf, (req, res) => {
+    try { return res.json(postInvoiceToLedger(req.params.id, res.locals.userId)); }
+    catch (error) { return res.status(400).json({ error: error instanceof Error ? error.message : "請求売上の記帳に失敗しました" }); }
+  });
+  app.post("/api/v1/invoices/:id/payments", requireSession, requireCsrf, (req, res) => {
+    try { return res.status(201).json(recordInvoicePayment(req.params.id, req.body, res.locals.userId)); }
+    catch (error) { return res.status(400).json({ error: error instanceof Error ? error.message : "入金記録に失敗しました" }); }
   });
 
   app.get("/api/v1/records/:collection", requireSession, (req, res) => {

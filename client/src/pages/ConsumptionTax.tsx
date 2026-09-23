@@ -86,29 +86,36 @@ export default function ConsumptionTax() {
     const purchaseTaxByAccount = new Map<string, number>();
     let unclassifiedCount = 0;
 
-    yearJournals.forEach((j) => {
-      const category = j.taxCategory;
+    function addTaxEntry(category: JournalEntry["taxCategory"], amount: number, taxRate: number | undefined, taxIncluded: boolean | undefined, accountId: string, side: "debit" | "credit") {
       const isSales = category === "taxable-sales" || category === "taxable-sales-reduced";
       const isPurchase = category === "taxable-purchase" || category === "taxable-purchase-reduced";
-      if (!isSales && !isPurchase) {
-        if (!category || category === "out-of-scope") unclassifiedCount++;
+      if (!isSales && !isPurchase) return;
+      const rate = taxRate ?? (category?.endsWith("-reduced") ? 8 : 10);
+      const tax = taxIncluded === false ? Math.floor(amount * rate / 100) : amount - Math.floor(amount * 100 / (100 + rate));
+      const base = taxIncluded === false ? amount : amount - tax;
+      const direction = (isSales ? side === "credit" : side === "debit") ? 1 : -1;
+      if (isSales) {
+        taxableSales += base * direction;
+        salesTax += tax * direction;
+        salesByAccount.set(accountId, (salesByAccount.get(accountId) || 0) + base * direction);
+        salesTaxByAccount.set(accountId, (salesTaxByAccount.get(accountId) || 0) + tax * direction);
+      } else {
+        taxablePurchases += base * direction;
+        purchaseTax += tax * direction;
+        purchasesByAccount.set(accountId, (purchasesByAccount.get(accountId) || 0) + base * direction);
+        purchaseTaxByAccount.set(accountId, (purchaseTaxByAccount.get(accountId) || 0) + tax * direction);
+      }
+    }
+
+    yearJournals.forEach((j) => {
+      if (j.sourceKey?.startsWith("invoice-payment:")) return;
+      if (j.lines?.length) {
+        for (const line of j.lines) addTaxEntry(line.taxCategory, line.amount, line.taxRate, line.taxIncluded, line.accountId, line.side);
         return;
       }
-      const rate = j.taxRate ?? (category?.endsWith("-reduced") ? 8 : 10);
-      const tax = j.taxIncluded === false ? Math.floor(j.amount * rate / 100) : j.amount - Math.floor(j.amount * 100 / (100 + rate));
-      const base = j.taxIncluded === false ? j.amount : j.amount - tax;
-      const accountId = isSales ? j.creditAccountId : j.debitAccountId;
-      if (isSales) {
-        taxableSales += base;
-        salesTax += tax;
-        salesByAccount.set(accountId, (salesByAccount.get(accountId) || 0) + base);
-        salesTaxByAccount.set(accountId, (salesTaxByAccount.get(accountId) || 0) + tax);
-      } else {
-        taxablePurchases += base;
-        purchaseTax += tax;
-        purchasesByAccount.set(accountId, (purchasesByAccount.get(accountId) || 0) + base);
-        purchaseTaxByAccount.set(accountId, (purchaseTaxByAccount.get(accountId) || 0) + tax);
-      }
+      const category = j.taxCategory;
+      if (!category || category === "out-of-scope") unclassifiedCount++;
+      addTaxEntry(category, j.amount, j.taxRate, j.taxIncluded, category?.startsWith("taxable-sales") ? j.creditAccountId : j.debitAccountId, category?.startsWith("taxable-sales") ? "credit" : "debit");
     });
 
     let taxPayable = 0;

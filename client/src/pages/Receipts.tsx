@@ -49,6 +49,7 @@ import { Camera, ImageIcon, Plus, Trash2, X, ZoomIn, BookOpen, Link2, FileText, 
 import { analyzeReceipt, getReceiptConfidenceLabel, type ReceiptAnalysis } from "@/lib/receipt-ai";
 import { useEffect, useState, useCallback, useRef, useMemo } from "react";
 import { toast } from "sonner";
+import { journalLines } from "@shared/accounting";
 
 function isPdfData(data: string): boolean {
   return data.startsWith("data:application/pdf");
@@ -447,8 +448,9 @@ export default function Receipts() {
           {journalDetailReceipt && (() => {
             const journal = getLinkedJournal(journalDetailReceipt);
             if (!journal) return <p className="text-[13px] text-muted-foreground">仕訳が見つかりません</p>;
-            const debit = accountMap.get(journal.debitAccountId);
-            const credit = accountMap.get(journal.creditAccountId);
+            const lines = journalLines(journal);
+            const debit = lines.filter((line) => line.side === "debit").map((line) => `${accountMap.get(line.accountId)?.name || "不明科目"} ${formatYen(line.amount)}`).join("、");
+            const credit = lines.filter((line) => line.side === "credit").map((line) => `${accountMap.get(line.accountId)?.name || "不明科目"} ${formatYen(line.amount)}`).join("、");
             return (
               <div className="space-y-3 mt-2">
                 <div className="grid grid-cols-2 gap-3">
@@ -464,11 +466,11 @@ export default function Receipts() {
                 <div className="grid grid-cols-2 gap-3">
                   <div className="bg-muted/30 rounded-lg p-3">
                     <div className="text-[11px] text-muted-foreground font-semibold mb-1">借方</div>
-                    <div className="text-[13px] font-semibold">{debit?.name || "—"}</div>
+                    <div className="text-[13px] font-semibold">{debit || "—"}</div>
                   </div>
                   <div className="bg-muted/30 rounded-lg p-3">
                     <div className="text-[11px] text-muted-foreground font-semibold mb-1">貸方</div>
-                    <div className="text-[13px] font-semibold">{credit?.name || "—"}</div>
+                    <div className="text-[13px] font-semibold">{credit || "—"}</div>
                   </div>
                 </div>
                 {journal.description && (

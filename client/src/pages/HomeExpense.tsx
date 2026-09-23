@@ -35,6 +35,7 @@ import { formatYen, CATEGORY_LABELS } from "@/lib/utils";
 import { Plus, Trash2, Calculator, Save, Info } from "lucide-react";
 import { useEffect, useState, useMemo } from "react";
 import { toast } from "sonner";
+import { journalLines } from "@shared/accounting";
 import { loadAppJson, saveAppJson } from "@/lib/app-storage";
 
 interface HomeExpenseRule {
@@ -93,8 +94,7 @@ export default function HomeExpense() {
   const calculations = useMemo(() => {
     return rules.map((rule) => {
       const total = yearJournals
-        .filter((j) => j.debitAccountId === rule.accountId)
-        .reduce((sum, j) => sum + j.amount, 0);
+        .reduce((sum, journal) => sum + journalLines(journal).filter((line) => line.accountId === rule.accountId).reduce((lineSum, line) => lineSum + (line.side === "debit" ? line.amount : -line.amount), 0), 0);
       const businessAmount = Math.round(total * (rule.businessRatio / 100));
       const personalAmount = total - businessAmount;
       return {

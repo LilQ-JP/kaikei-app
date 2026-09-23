@@ -27,6 +27,7 @@ import {
 } from "recharts";
 import { Link } from "wouter";
 import { calculateProfitLoss } from "@shared/accounting";
+import { journalLines } from "@shared/accounting";
 
 const CHART_COLORS = ["#007aff", "#34c759", "#ff3b30", "#ff9500", "#af52de", "#5ac8fa", "#ff2d55", "#ffcc00"];
 
@@ -327,8 +328,9 @@ export default function Dashboard() {
           ) : (
             <div className="divide-y divide-border">
               {recentJournals.map((j) => {
-                const debit = accountMap.get(j.debitAccountId);
-                const credit = accountMap.get(j.creditAccountId);
+                const lines = journalLines(j);
+                const debitNames = lines.filter((line) => line.side === "debit").map((line) => accountMap.get(line.accountId)?.name || "?").join("・");
+                const creditNames = lines.filter((line) => line.side === "credit").map((line) => accountMap.get(line.accountId)?.name || "?").join("・");
                 return (
                   <div key={j.id} className="flex items-center gap-3 py-2.5">
                     <div className="text-[12px] font-mono text-muted-foreground w-[80px] shrink-0">
@@ -337,7 +339,7 @@ export default function Dashboard() {
                     <div className="flex-1 min-w-0">
                       <div className="text-[13px] font-semibold truncate">{j.description || "—"}</div>
                       <div className="text-[11px] text-muted-foreground">
-                        {debit?.name || "?"} → {credit?.name || "?"}
+                        {debitNames || "?"} → {creditNames || "?"}
                       </div>
                     </div>
                     <div className="text-[13px] font-mono font-bold text-right shrink-0">

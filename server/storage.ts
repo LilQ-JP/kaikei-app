@@ -1,7 +1,7 @@
 import { DatabaseSync } from "node:sqlite";
 import fs from "node:fs";
 import path from "node:path";
-import { createCipheriv, createDecipheriv, createHash, randomBytes, scryptSync, timingSafeEqual } from "node:crypto";
+import { createCipheriv, createDecipheriv, createHash, randomBytes, randomUUID, scryptSync, timingSafeEqual } from "node:crypto";
 import { z } from "zod";
 import { validateBalancedJournal, journalLines } from "../shared/accounting";
 
@@ -122,6 +122,150 @@ function assertFiscalYearOpen(date: string) {
   }
 }
 
+function assertRealDate(dateValue: string) {
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(dateValue)) throw new Error("日付形式が不正です");
+  const parsed = new Date(`${dateValue}T00:00:00Z`);
+  if (Number.isNaN(parsed.getTime()) || parsed.toISOString().slice(0, 10) !== dateValue) throw new Error("実在しない日付です");
+  assertFiscalYearOpen(dateValue);
+}
+
+function accountIdByCode(code: string): string {
+  const row = database.prepare("SELECT id FROM records WHERE collection = 'accounts' AND json_extract(data, '$.code') = ? LIMIT 1").get(code) as { id?: string } | undefined;
+  if (!row?.id) throw new Error(`勘定科目コード${code}がありません。勘定科目を初期化してください`);
+  return row.id;
+}
+
+function insertRecordAndAudit(collection: RecordCollection, id: string, data: unknown, userId: string, timestamp: string) {
+  const serialized = JSON.stringify(data);
+  database.prepare(`
+    INSERT INTO records(collection, id, data, updated_at) VALUES (?, ?, ?, ?)
+    ON CONFLICT(collection, id) DO UPDATE SET data = excluded.data, updated_at = excluded.updated_at
+  `).run(collection, id, serialized, timestamp);
+  database.prepare("INSERT INTO audit_events(id, user_id, action, collection, record_id, occurred_at, data) VALUES (?, ?, ?, ?, ?, ?, ?)")
+    .run(randomBytes(16).toString("hex"), userId, "upsert", collection, id, timestamp, serialized);
+}
+
+/** Posts a sent invoice to AR, revenue and output-tax accounts atomically. */
+export function postInvoiceToLedger(invoiceId: string, userId: string) {
+  database.exec("BEGIN IMMEDIATE");
+  try {
+    const invoice = getRecord("invoices", invoiceId) as Record<string, any> | undefined;
+    if (!invoice) throw new Error("請求書が見つかりません");
+    if (invoice.issueJournalId) {
+      database.exec("COMMIT");
+      return { invoice, journalId: invoice.issueJournalId, alreadyPosted: true };
+    }
+    const total = Number(invoice.total);
+    const subtotal = Number(invoice.subtotal);
+    const taxAmount = Number(invoice.taxAmount || 0);
+    if (!Number.isSafeInteger(total) || total <= 0 || !Number.isSafeInteger(subtotal) || subtotal < 0 || !Number.isSafeInteger(taxAmount) || subtotal + taxAmount !== total) throw new Error("請求書の金額が一致しません");
+    assertRealDate(String(invoice.issueDate));
+    const breakdown = Array.isArray(invoice.taxBreakdown) && invoice.taxBreakdown.length
+      ? invoice.taxBreakdown as Array<{ taxRate: number; taxableAmount: number; taxAmount: number }>
+      : [{ taxRate: Number(invoice.taxRate || 10), taxableAmount: subtotal, taxAmount }];
+    if (breakdown.some((group) => !Number.isSafeInteger(group.taxableAmount) || group.taxableAmount < 0 || !Number.isSafeInteger(group.taxAmount) || group.taxAmount < 0 || ![0, 8, 10].includes(group.taxRate)) || breakdown.reduce((sum, group) => sum + group.taxableAmount, 0) !== subtotal || breakdown.reduce((sum, group) => sum + group.taxAmount, 0) !== taxAmount) throw new Error("請求書の税率別金額が一致しません");
+    const receivableAccountId = accountIdByCode("108");
+    const salesAccountId = accountIdByCode("400");
+    const outputTaxAccountId = taxAmount > 0 ? accountIdByCode("211") : undefined;
+    const lines = [
+      { side: "debit" as const, accountId: receivableAccountId, amount: total },
+      ...breakdown.filter((group) => group.taxableAmount > 0).map((group) => ({
+        side: "credit" as const,
+        accountId: salesAccountId,
+        amount: group.taxableAmount,
+        taxCategory: group.taxRate === 8 ? "taxable-sales-reduced" as const : group.taxRate === 10 ? "taxable-sales" as const : "exempt" as const,
+        taxRate: group.taxRate,
+        taxIncluded: false,
+      })),
+      ...(taxAmount > 0 ? [{ side: "credit" as const, accountId: outputTaxAccountId!, amount: taxAmount }] : []),
+    ];
+    const journalId = randomUUID();
+    const journal = {
+      id: journalId,
+      date: invoice.issueDate,
+      debitAccountId: receivableAccountId,
+      creditAccountId: salesAccountId,
+      amount: total,
+      description: `請求売上 ${invoice.invoiceNumber || ""} ${invoice.clientName || ""}`.trim(),
+      status: "posted",
+      sourceKey: `invoice-issued:${invoiceId}`,
+      lines,
+      createdAt: now(),
+      updatedAt: now(),
+    };
+    assertRecordIsValid("journals", journalId, journal);
+    const updatedInvoice = { ...invoice, status: invoice.status === "draft" ? "sent" : invoice.status, issueJournalId: journalId, updatedAt: now() };
+    const timestamp = now();
+    insertRecordAndAudit("journals", journalId, journal, userId, timestamp);
+    insertRecordAndAudit("invoices", invoiceId, updatedInvoice, userId, timestamp);
+    database.exec("COMMIT");
+    return { invoice: updatedInvoice, journalId, alreadyPosted: false };
+  } catch (error) {
+    database.exec("ROLLBACK");
+    throw error;
+  }
+}
+
+/** Records a partial or full customer payment and reduces accounts receivable atomically. */
+export function recordInvoicePayment(invoiceId: string, input: unknown, userId: string) {
+  const paymentInput = z.object({
+    requestId: z.string().uuid(),
+    date: z.string(),
+    amount: z.number().int().positive().safe(),
+    depositAccountId: z.string().min(1).max(128),
+    memo: z.string().max(500).optional(),
+  }).parse(input);
+  database.exec("BEGIN IMMEDIATE");
+  try {
+    const invoice = getRecord("invoices", invoiceId) as Record<string, any> | undefined;
+    if (!invoice) throw new Error("請求書が見つかりません");
+    if (!invoice.issueJournalId || !getRecord("journals", invoice.issueJournalId)) throw new Error("先に請求売上を帳簿へ登録してください");
+    const previousPayment = (Array.isArray(invoice.payments) ? invoice.payments : []).find((payment: { id?: string }) => payment.id === paymentInput.requestId) as { date?: string; amount?: number; depositAccountId?: string; journalId?: string } | undefined;
+    if (previousPayment) {
+      if (previousPayment.date !== paymentInput.date || previousPayment.amount !== paymentInput.amount || previousPayment.depositAccountId !== paymentInput.depositAccountId) throw new Error("この入金リクエストIDは別の内容です");
+      const receivedBefore = (invoice.payments as Array<{ amount: number }>).reduce((sum, payment) => sum + Number(payment.amount || 0), 0);
+      database.exec("COMMIT");
+      return { invoice, payment: previousPayment, outstanding: Number(invoice.total) - receivedBefore, alreadyRecorded: true };
+    }
+    assertRealDate(paymentInput.date);
+    const depositAccount = getRecord("accounts", paymentInput.depositAccountId) as { category?: string; code?: string } | undefined;
+    if (!depositAccount || depositAccount.category !== "asset" || depositAccount.code === "108") throw new Error("入金先には売掛金以外の資産科目を指定してください");
+    const payments = Array.isArray(invoice.payments) ? invoice.payments as Array<{ amount: number }> : [];
+    const received = payments.reduce((sum, payment) => sum + Number(payment.amount || 0), 0);
+    const outstanding = Number(invoice.total) - received;
+    if (!Number.isSafeInteger(outstanding) || outstanding <= 0) throw new Error("この請求書はすでに全額入金済みです");
+    if (paymentInput.amount > outstanding) throw new Error(`入金額が残額（${outstanding}円）を超えています`);
+    const paymentId = paymentInput.requestId;
+    const journalId = randomUUID();
+    const receivableAccountId = accountIdByCode("108");
+    const journal = {
+      id: journalId,
+      date: paymentInput.date,
+      debitAccountId: paymentInput.depositAccountId,
+      creditAccountId: receivableAccountId,
+      amount: paymentInput.amount,
+      description: `請求入金 ${invoice.invoiceNumber || ""} ${invoice.clientName || ""}`.trim(),
+      status: "posted",
+      sourceKey: `invoice-payment:${invoiceId}:${paymentId}`,
+      createdAt: now(),
+      updatedAt: now(),
+    };
+    assertRecordIsValid("journals", journalId, journal);
+    const payment = { id: paymentId, date: paymentInput.date, amount: paymentInput.amount, depositAccountId: paymentInput.depositAccountId, journalId, memo: paymentInput.memo, createdAt: now() };
+    const nextPayments = [...payments, payment];
+    const nextStatus = received + paymentInput.amount >= Number(invoice.total) ? "paid" : invoice.status === "overdue" ? "overdue" : "sent";
+    const updatedInvoice = { ...invoice, payments: nextPayments, status: nextStatus, updatedAt: now() };
+    const timestamp = now();
+    insertRecordAndAudit("journals", journalId, journal, userId, timestamp);
+    insertRecordAndAudit("invoices", invoiceId, updatedInvoice, userId, timestamp);
+    database.exec("COMMIT");
+    return { invoice: updatedInvoice, payment, outstanding: outstanding - paymentInput.amount };
+  } catch (error) {
+    database.exec("ROLLBACK");
+    throw error;
+  }
+}
+
 function assertRecordIsValid(collection: RecordCollection, id: string, data: unknown) {
   if (!data || typeof data !== "object" || Array.isArray(data)) throw new Error("保存データが不正です");
   const record = data as Record<string, unknown>;
@@ -133,6 +277,13 @@ function assertRecordIsValid(collection: RecordCollection, id: string, data: unk
       const referenced = (listRecords("journals") as Array<Parameters<typeof journalLines>[0]>).some((journal) => journalLines(journal).some((line) => line.accountId === id));
       if (referenced) throw new Error("仕訳で使用中の勘定科目は区分・コードを変更できません");
     }
+    return;
+  }
+  if (collection === "invoices") {
+    const invoice = z.object({ id: z.string().min(1), status: z.enum(["draft", "sent", "paid", "overdue"]) }).passthrough().parse(data);
+    const existing = getRecord("invoices", id) as { status?: string } | undefined;
+    if (existing && existing.status !== "draft") throw new Error("送付済み請求書は編集できません。入金は入金記録から追加してください");
+    if (invoice.status !== "draft" || invoice.issueJournalId || (Array.isArray(invoice.payments) && invoice.payments.length > 0)) throw new Error("送付済み状態や入金履歴は専用の請求処理から保存してください");
     return;
   }
   if (collection === "fiscalYears") {
@@ -199,6 +350,10 @@ export function putRecord(collection: RecordCollection, id: string, data: unknow
 
 export function deleteRecord(collection: RecordCollection, id: string, userId: string) {
   if (collection === "fiscalYears") throw new Error("年度設定は削除できません。解除理由を記録して開き直してください");
+  if (collection === "invoices") {
+    const invoice = getRecord("invoices", id) as { status?: string; issueJournalId?: string; payments?: unknown[] } | undefined;
+    if (invoice && (invoice.status !== "draft" || invoice.issueJournalId || invoice.payments?.length)) throw new Error("送付済み、帳簿登録済み、または入金履歴のある請求書は削除できません");
+  }
   if (collection === "accounts") {
     const referenced = (listRecords("journals") as Array<Parameters<typeof journalLines>[0]>).some((journal) =>
       journalLines(journal).some((line) => line.accountId === id));
@@ -220,6 +375,7 @@ export function deleteRecord(collection: RecordCollection, id: string, userId: s
 export function clearRecords(collection: RecordCollection, userId: string) {
   if (collection === "journals") throw new Error("仕訳帳の一括削除は許可されていません");
   if (collection === "fiscalYears") throw new Error("年度設定の一括削除は許可されていません");
+  if (collection === "invoices" && (listRecords("invoices") as Array<{ status?: string; issueJournalId?: string; payments?: unknown[] }>).some((invoice) => invoice.status !== "draft" || invoice.issueJournalId || invoice.payments?.length)) throw new Error("送付済み、帳簿登録済み、または入金履歴のある請求書があるため一括削除できません");
   if (collection === "accounts" && listRecords("journals").length > 0) throw new Error("仕訳があるため勘定科目を一括削除できません");
   const timestamp = now();
   database.prepare("DELETE FROM records WHERE collection = ?").run(collection);

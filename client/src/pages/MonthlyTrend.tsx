@@ -24,6 +24,7 @@ import { formatYen, downloadFile, CATEGORY_LABELS } from "@/lib/utils";
 import { Download, TrendingUp, TrendingDown } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
 import { toast } from "sonner";
+import { journalLines } from "@shared/accounting";
 import {
   BarChart,
   Bar,
@@ -85,17 +86,21 @@ export default function MonthlyTrend() {
       const accountAmounts: Record<string, number> = {};
 
       monthJournals.forEach((j) => {
-        const creditAcc = accountMap.get(j.creditAccountId);
-        const debitAcc = accountMap.get(j.debitAccountId);
-
-        if (creditAcc?.category === "income") {
-          income += j.amount;
-          accountAmounts[creditAcc.id] = (accountAmounts[creditAcc.id] || 0) + j.amount;
-        }
-        if (debitAcc?.category === "expense") {
-          expense += j.amount;
-          accountAmounts[debitAcc.id] = (accountAmounts[debitAcc.id] || 0) + j.amount;
-        }
+        journalLines(j).forEach((line) => {
+          const account = accountMap.get(line.accountId);
+          if (!account) return;
+          const sign = line.side === "credit" ? 1 : -1;
+          if (account.category === "income") {
+            const amount = line.amount * sign;
+            income += amount;
+            accountAmounts[account.id] = (accountAmounts[account.id] || 0) + amount;
+          }
+          if (account.category === "expense") {
+            const amount = line.amount * -sign;
+            expense += amount;
+            accountAmounts[account.id] = (accountAmounts[account.id] || 0) + amount;
+          }
+        });
       });
 
       data.push({

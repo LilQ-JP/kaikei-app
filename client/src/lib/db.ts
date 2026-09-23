@@ -69,7 +69,7 @@ export interface JournalEntry {
   debitAccountId: string;
   creditAccountId: string;
   amount: number;
-  lines?: Array<{ side: "debit" | "credit"; accountId: string; amount: number }>;
+  lines?: Array<{ side: "debit" | "credit"; accountId: string; amount: number; taxCategory?: JournalEntry["taxCategory"]; taxRate?: number; taxIncluded?: boolean }>;
   description: string;
   memo?: string;
   receiptId?: string;
@@ -113,8 +113,20 @@ export interface Invoice {
   bankAccountType?: string;
   bankAccountNumber?: string;
   bankAccountName?: string;
+  issueJournalId?: string;
+  payments?: InvoicePayment[];
   createdAt: string;
   updatedAt: string;
+}
+
+export interface InvoicePayment {
+  id: string;
+  date: string;
+  amount: number;
+  depositAccountId: string;
+  journalId: string;
+  memo?: string;
+  createdAt: string;
 }
 
 export interface InvoiceItem {
@@ -266,6 +278,7 @@ export const DEFAULT_ACCOUNTS: Omit<AccountItem, "id" | "createdAt">[] = [
   { code: "206", name: "前受金", category: "liability", subcategory: "流動負債", isDefault: true },
   { code: "208", name: "預り金", category: "liability", subcategory: "流動負債", isDefault: true },
   { code: "210", name: "仮受金", category: "liability", subcategory: "流動負債", isDefault: true },
+  { code: "211", name: "仮受消費税", category: "liability", subcategory: "流動負債", isDefault: true },
   { code: "212", name: "未払消費税", category: "liability", subcategory: "流動負債", isDefault: true },
   { code: "250", name: "借入金", category: "liability", subcategory: "固定負債", isDefault: true },
   { code: "270", name: "事業主借", category: "liability", subcategory: "事業主勘定", isDefault: true },
@@ -482,6 +495,16 @@ export async function putInvoice(invoice: Invoice): Promise<void> {
   if (USE_REMOTE_DB) return remoteRequest<void>(`${remoteCollection("invoices")}/${invoice.id}`, { method: "PUT", body: JSON.stringify(invoice) });
   const db = await getDB();
   await db.put("invoices", invoice);
+}
+
+export async function postInvoiceToLedger(invoiceId: string): Promise<{ invoice: Invoice; journalId: string; alreadyPosted: boolean }> {
+  if (!USE_REMOTE_DB) throw new Error("請求の帳簿登録にはサーバー接続が必要です");
+  return remoteRequest(`/invoices/${encodeURIComponent(invoiceId)}/issue`, { method: "POST", body: "{}" });
+}
+
+export async function recordInvoicePayment(invoiceId: string, input: { requestId: string; date: string; amount: number; depositAccountId: string; memo?: string }): Promise<{ invoice: Invoice; payment: InvoicePayment; outstanding: number; alreadyRecorded?: boolean }> {
+  if (!USE_REMOTE_DB) throw new Error("入金の帳簿登録にはサーバー接続が必要です");
+  return remoteRequest(`/invoices/${encodeURIComponent(invoiceId)}/payments`, { method: "POST", body: JSON.stringify(input) });
 }
 
 export async function deleteInvoice(id: string): Promise<void> {

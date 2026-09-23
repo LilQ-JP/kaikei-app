@@ -42,6 +42,7 @@ import { Download, Plus, Search, Trash2, Camera, Pencil, CreditCard, FileText, R
 import { useEffect, useMemo, useState, useCallback } from "react";
 import { Link } from "wouter";
 import { toast } from "sonner";
+import { journalLines } from "@shared/accounting";
 
 function isPdfData(data: string): boolean {
   return data.startsWith("data:application/pdf");
@@ -88,13 +89,14 @@ export default function JournalList() {
     if (!search) return journals;
     const q = search.toLowerCase();
     return journals.filter((j) => {
-      const debit = accountMap.get(j.debitAccountId);
-      const credit = accountMap.get(j.creditAccountId);
+      const lines = journalLines(j);
+      const debitNames = lines.filter((line) => line.side === "debit").map((line) => accountMap.get(line.accountId)?.name || "").join(" ");
+      const creditNames = lines.filter((line) => line.side === "credit").map((line) => accountMap.get(line.accountId)?.name || "").join(" ");
       return (
         j.date.includes(q) ||
         j.description.toLowerCase().includes(q) ||
-        debit?.name.toLowerCase().includes(q) ||
-        credit?.name.toLowerCase().includes(q) ||
+        debitNames.toLowerCase().includes(q) ||
+        creditNames.toLowerCase().includes(q) ||
         String(j.amount).includes(q) ||
         (j.paymentMethod && j.paymentMethod.toLowerCase().includes(q))
       );
@@ -140,8 +142,8 @@ export default function JournalList() {
   function handleExportCSV() {
     const data = filtered.map((j) => ({
       date: j.date,
-      debitName: accountMap.get(j.debitAccountId)?.name || "",
-      creditName: accountMap.get(j.creditAccountId)?.name || "",
+      debitName: journalLines(j).filter((line) => line.side === "debit").map((line) => `${accountMap.get(line.accountId)?.name || "不明科目"}${j.lines?.length ? ` ${formatYen(line.amount)}` : ""}`).join(" / "),
+      creditName: journalLines(j).filter((line) => line.side === "credit").map((line) => `${accountMap.get(line.accountId)?.name || "不明科目"}${j.lines?.length ? ` ${formatYen(line.amount)}` : ""}`).join(" / "),
       amount: j.amount,
       description: j.description,
     }));
@@ -217,8 +219,9 @@ export default function JournalList() {
                 </thead>
                 <tbody className="divide-y divide-border">
                   {filtered.map((j) => {
-                    const debit = accountMap.get(j.debitAccountId);
-                    const credit = accountMap.get(j.creditAccountId);
+                    const lines = journalLines(j);
+                    const debitLines = lines.filter((line) => line.side === "debit");
+                    const creditLines = lines.filter((line) => line.side === "credit");
                     const hasReceipt = !!j.receiptId;
                     return (
                       <tr key={j.id} className="hover:bg-muted/20 transition-colors">
@@ -226,10 +229,10 @@ export default function JournalList() {
                           {j.date}
                         </td>
                         <td className="px-4 py-2.5 font-semibold whitespace-nowrap">
-                          {debit?.name || "—"}
+                          {debitLines.length === 0 ? "—" : debitLines.map((line, index) => <div key={`${line.accountId}-${index}`}>{accountMap.get(line.accountId)?.name || "不明科目"}{j.lines?.length ? <span className="ml-1 text-[11px] font-normal text-muted-foreground">{formatYen(line.amount)}</span> : null}</div>)}
                         </td>
                         <td className="px-4 py-2.5 font-semibold whitespace-nowrap">
-                          {credit?.name || "—"}
+                          {creditLines.length === 0 ? "—" : creditLines.map((line, index) => <div key={`${line.accountId}-${index}`}>{accountMap.get(line.accountId)?.name || "不明科目"}{j.lines?.length ? <span className="ml-1 text-[11px] font-normal text-muted-foreground">{formatYen(line.amount)}</span> : null}</div>)}
                         </td>
                         <td className="px-4 py-2.5 text-right font-mono font-bold whitespace-nowrap">
                           {formatYen(j.amount)}

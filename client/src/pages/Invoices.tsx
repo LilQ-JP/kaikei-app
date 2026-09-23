@@ -39,10 +39,14 @@ import {
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
 import {
+  getAllAccounts,
   getAllInvoices,
   putInvoice,
   deleteInvoice,
+  postInvoiceToLedger,
+  recordInvoicePayment,
   getProfile,
+  type AccountItem,
   type Invoice,
   type InvoiceItem,
   type BusinessProfile,
@@ -65,11 +69,19 @@ function emptyInvoiceItem(): InvoiceItem {
 
 export default function Invoices() {
   const [invoices, setInvoices] = useState<Invoice[]>([]);
+  const [accounts, setAccounts] = useState<AccountItem[]>([]);
   const [profile, setProfile] = useState<BusinessProfile | undefined>();
   const [loading, setLoading] = useState(true);
   const [dialogOpen, setDialogOpen] = useState(false);
   const [editingInvoice, setEditingInvoice] = useState<Invoice | null>(null);
   const [previewingInvoice, setPreviewingInvoice] = useState<Invoice | null>(null);
+  const [paymentInvoice, setPaymentInvoice] = useState<Invoice | null>(null);
+  const [paymentDate, setPaymentDate] = useState(getToday());
+  const [paymentAmount, setPaymentAmount] = useState("");
+  const [paymentAccountId, setPaymentAccountId] = useState("");
+  const [paymentMemo, setPaymentMemo] = useState("");
+  const [paymentRequestId, setPaymentRequestId] = useState("");
+  const [savingPayment, setSavingPayment] = useState(false);
   const previewFrameRef = useRef<HTMLIFrameElement>(null);
 
   // Form state
@@ -89,9 +101,10 @@ export default function Invoices() {
   const [bankAccountName, setBankAccountName] = useState("");
 
   const load = useCallback(async () => {
-    const [inv, prof] = await Promise.all([getAllInvoices(), getProfile()]);
+    const [inv, prof, accs] = await Promise.all([getAllInvoices(), getProfile(), getAllAccounts()]);
     setInvoices(inv);
     setProfile(prof);
+    setAccounts(accs);
     if (prof) applyProfileBankInfo(prof);
     setLoading(false);
   }, []);
@@ -224,12 +237,46 @@ export default function Invoices() {
     setDialogOpen(true);
   }
 
-  async function updateStatus(id: string, status: Invoice["status"]) {
-    const inv = invoices.find((i) => i.id === id);
-    if (!inv) return;
-    await putInvoice({ ...inv, status, updatedAt: new Date().toISOString() });
-    toast.success("ステータスを更新しました");
-    load();
+  async function handlePostInvoice(invoice: Invoice) {
+    try {
+      await postInvoiceToLedger(invoice.id);
+      toast.success("請求売上を仕訳帳へ登録しました");
+      await load();
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : "請求売上を登録できませんでした");
+    }
+  }
+
+  function openPaymentDialog(invoice: Invoice) {
+    const received = (invoice.payments || []).reduce((sum, payment) => sum + payment.amount, 0);
+    const preferredAccount = accounts.find((account) => account.category === "asset" && account.code === "102")
+      || accounts.find((account) => account.category === "asset" && account.code !== "108");
+    setPaymentInvoice(invoice);
+    setPaymentRequestId(crypto.randomUUID());
+    setPaymentDate(getToday());
+    setPaymentAmount(String(invoice.total - received));
+    setPaymentAccountId(preferredAccount?.id || "");
+    setPaymentMemo("");
+  }
+
+  async function handleRecordPayment() {
+    if (!paymentInvoice) return;
+    const amount = Number(paymentAmount);
+    if (!Number.isSafeInteger(amount) || amount <= 0 || !paymentAccountId) {
+      toast.error("入金額と入金先口座を正しく入力してください");
+      return;
+    }
+    try {
+      setSavingPayment(true);
+      await recordInvoicePayment(paymentInvoice.id, { requestId: paymentRequestId, date: paymentDate, amount, depositAccountId: paymentAccountId, memo: paymentMemo.trim() || undefined });
+      toast.success("入金を仕訳帳へ記録しました");
+      setPaymentInvoice(null);
+      await load();
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : "入金を記録できませんでした");
+    } finally {
+      setSavingPayment(false);
+    }
   }
 
   async function handleDelete(id: string) {
@@ -473,8 +520,11 @@ export default function Invoices() {
         </Card>
       ) : (
         <div className="space-y-3">
-          {invoices.map((inv) => (
-            <Card key={inv.id} className="border shadow-sm">
+          {invoices.map((inv) => {
+            const received = (inv.payments || []).reduce((sum, payment) => sum + payment.amount, 0);
+            const outstanding = Math.max(0, inv.total - received);
+            const unreconciledLegacyPaid = inv.status === "paid" && received < inv.total;
+            return <Card key={inv.id} className="border shadow-sm">
               <CardContent className="p-4">
                 <div className="flex items-center justify-between">
                   <div className="flex items-center gap-4 min-w-0">
@@ -485,31 +535,21 @@ export default function Invoices() {
                       </div>
                     </div>
                     <span
-                      className={`inline-flex items-center rounded-full px-2 py-0.5 text-[11px] font-semibold shrink-0 ${INVOICE_STATUS_COLORS[inv.status]}`}
+                      className={`inline-flex items-center rounded-full px-2 py-0.5 text-[11px] font-semibold shrink-0 ${unreconciledLegacyPaid ? "text-amber-700 bg-amber-50" : INVOICE_STATUS_COLORS[inv.status]}`}
                     >
-                      {INVOICE_STATUS_LABELS[inv.status]}
+                      {unreconciledLegacyPaid ? "入金記録が未登録" : INVOICE_STATUS_LABELS[inv.status]}
                     </span>
                   </div>
                   <div className="flex items-center gap-3 shrink-0">
                     <div className="text-right">
                       <div className="text-[15px] font-mono font-bold">{formatYen(inv.total)}</div>
                       <div className="text-[11px] text-muted-foreground">{inv.issueDate}</div>
+                      {inv.status !== "draft" && <div className="text-[11px] text-muted-foreground">入金 {formatYen(received)} / 残額 {formatYen(outstanding)}</div>}
                     </div>
                     <div className="flex gap-1">
-                      <Select
-                        value={inv.status}
-                        onValueChange={(v) => updateStatus(inv.id, v as Invoice["status"])}
-                      >
-                        <SelectTrigger className="h-8 w-[100px] text-[12px]">
-                          <SelectValue />
-                        </SelectTrigger>
-                        <SelectContent>
-                          <SelectItem value="draft">下書き</SelectItem>
-                          <SelectItem value="sent">送付済</SelectItem>
-                          <SelectItem value="paid">入金済</SelectItem>
-                          <SelectItem value="overdue">期限超過</SelectItem>
-                        </SelectContent>
-                      </Select>
+                      {inv.status === "draft" && <Button variant="outline" size="sm" className="h-8 text-[12px]" onClick={() => handlePostInvoice(inv)}>送付済にする・売上記帳</Button>}
+                      {inv.status !== "draft" && !inv.issueJournalId && <Button variant="outline" size="sm" className="h-8 text-[12px]" onClick={() => handlePostInvoice(inv)}>請求売上を帳簿へ登録</Button>}
+                      {inv.issueJournalId && outstanding > 0 && <Button size="sm" className="h-8 text-[12px]" onClick={() => openPaymentDialog(inv)}>入金を記録</Button>}
 
                       {/* PDF / Preview dropdown */}
                       <DropdownMenu>
@@ -542,6 +582,7 @@ export default function Invoices() {
                             variant="ghost"
                             size="sm"
                             className="h-8 w-8 p-0 text-muted-foreground hover:text-destructive"
+                            disabled={inv.status !== "draft" || !!inv.issueJournalId || (inv.payments?.length || 0) > 0}
                           >
                             <Trash2 className="h-3.5 w-3.5" />
                           </Button>
@@ -564,9 +605,17 @@ export default function Invoices() {
                     </div>
                   </div>
                 </div>
+                {(inv.payments?.length || 0) > 0 && <div className="mt-3 border-t pt-2 space-y-1">
+                  <div className="text-[11px] font-semibold text-muted-foreground">入金履歴</div>
+                  {inv.payments!.map((payment) => <div key={payment.id} className="flex justify-between gap-3 text-[12px]">
+                    <span>{payment.date} · {accounts.find((account) => account.id === payment.depositAccountId)?.name || "入金口座"}{payment.memo ? ` · ${payment.memo}` : ""}</span>
+                    <span className="font-mono font-semibold">{formatYen(payment.amount)}</span>
+                  </div>)}
+                </div>}
+                {inv.status === "paid" && received === 0 && <p className="mt-2 text-[11px] text-amber-700">以前の状態変更では実際の入金日・口座が記録されていません。過去の情報は推測で補いません。帳簿登録前に、売上が仕訳帳へ手入力済みでないか確認してください。未登録の場合は「請求売上を帳簿へ登録」後、実際の入金日・口座を記録してください。</p>}
               </CardContent>
             </Card>
-          ))}
+          })}
         </div>
       )}
 
@@ -593,6 +642,46 @@ export default function Invoices() {
               PDF保存・印刷
             </Button>
           </div>
+        </DialogContent>
+      </Dialog>
+
+      <Dialog open={!!paymentInvoice} onOpenChange={(open) => !open && setPaymentInvoice(null)}>
+        <DialogContent className="max-w-md">
+          <DialogHeader>
+            <DialogTitle>請求書の入金を記録</DialogTitle>
+          </DialogHeader>
+          {paymentInvoice && <div className="space-y-4">
+            <div className="rounded-md bg-muted/40 p-3 text-[13px]">
+              <div className="font-semibold">{paymentInvoice.invoiceNumber} · {paymentInvoice.clientName}</div>
+              <div className="mt-1 text-muted-foreground">請求額 {formatYen(paymentInvoice.total)} / 入金後残額 {formatYen(Math.max(0, paymentInvoice.total - (paymentInvoice.payments || []).reduce((sum, payment) => sum + payment.amount, 0) - (Number(paymentAmount) || 0)))}</div>
+            </div>
+            <div className="space-y-1.5">
+              <Label htmlFor="payment-date">入金日</Label>
+              <Input id="payment-date" type="date" value={paymentDate} onChange={(event) => setPaymentDate(event.target.value)} />
+            </div>
+            <div className="space-y-1.5">
+              <Label htmlFor="payment-amount">今回の入金額（税込・円）</Label>
+              <Input id="payment-amount" type="number" min="1" step="1" value={paymentAmount} onChange={(event) => setPaymentAmount(event.target.value)} />
+            </div>
+            <div className="space-y-1.5">
+              <Label>入金先口座</Label>
+              <Select value={paymentAccountId} onValueChange={setPaymentAccountId}>
+                <SelectTrigger><SelectValue placeholder="口座を選択" /></SelectTrigger>
+                <SelectContent>
+                  {accounts.filter((account) => account.category === "asset" && account.code !== "108").map((account) => <SelectItem key={account.id} value={account.id}>{account.name}</SelectItem>)}
+                </SelectContent>
+              </Select>
+            </div>
+            <div className="space-y-1.5">
+              <Label htmlFor="payment-memo">メモ（任意）</Label>
+              <Input id="payment-memo" value={paymentMemo} onChange={(event) => setPaymentMemo(event.target.value)} placeholder="振込名義、手数料など" maxLength={500} />
+            </div>
+            <p className="text-[11px] leading-relaxed text-muted-foreground">入金仕訳（選択口座／売掛金）も同時に保存します。複数回の分割入金に対応し、請求額を超える金額は登録できません。</p>
+            <div className="flex justify-end gap-2">
+              <Button variant="outline" onClick={() => setPaymentInvoice(null)} disabled={savingPayment}>キャンセル</Button>
+              <Button onClick={handleRecordPayment} disabled={savingPayment}>{savingPayment ? "保存中…" : "入金を保存"}</Button>
+            </div>
+          </div>}
         </DialogContent>
       </Dialog>
     </div>

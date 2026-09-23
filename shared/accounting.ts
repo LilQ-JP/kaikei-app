@@ -27,6 +27,9 @@ export interface AccountingJournalLine {
   side: "debit" | "credit";
   accountId: string;
   amount: number;
+  taxCategory?: "taxable-sales" | "taxable-purchase" | "taxable-sales-reduced" | "taxable-purchase-reduced" | "exempt" | "non-taxable" | "out-of-scope";
+  taxRate?: number;
+  taxIncluded?: boolean;
 }
 
 export interface AccountBalance {
