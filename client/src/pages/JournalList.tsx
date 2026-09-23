@@ -42,7 +42,7 @@ import { Download, Plus, Search, Trash2, Camera, Pencil, CreditCard, FileText, R
 import { useEffect, useMemo, useState, useCallback } from "react";
 import { Link } from "wouter";
 import { toast } from "sonner";
-import { journalLines } from "@shared/accounting";
+import { compareJournalOrder, journalLines } from "@shared/accounting";
 
 function isPdfData(data: string): boolean {
   return data.startsWith("data:application/pdf");
@@ -94,17 +94,15 @@ export default function JournalList() {
       const debitNames = lines.filter((line) => line.side === "debit").map((line) => accountMap.get(line.accountId)?.name || "").join(" ");
       const creditNames = lines.filter((line) => line.side === "credit").map((line) => accountMap.get(line.accountId)?.name || "").join(" ");
       return (
-        j.date.includes(q) ||
-        j.description.toLowerCase().includes(q) ||
+        String(j.date ?? "").includes(q) ||
+        String(j.description ?? "").toLowerCase().includes(q) ||
         debitNames.toLowerCase().includes(q) ||
         creditNames.toLowerCase().includes(q) ||
         String(j.amount).includes(q) ||
         (j.paymentMethod && j.paymentMethod.toLowerCase().includes(q))
       );
     }).sort((a, b) => {
-      const dateOrder = a.date.localeCompare(b.date);
-      const tieOrder = a.createdAt.localeCompare(b.createdAt) || a.id.localeCompare(b.id);
-      return (oldestFirst ? 1 : -1) * (dateOrder || tieOrder);
+      return (oldestFirst ? 1 : -1) * compareJournalOrder(a, b);
     });
   }, [journals, search, accountMap, oldestFirst]);
 

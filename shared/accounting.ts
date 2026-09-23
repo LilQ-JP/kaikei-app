@@ -23,6 +23,16 @@ export interface AccountingJournal {
   description?: string;
 }
 
+/** Stable ordering that tolerates legacy rows without timestamp metadata. */
+export function compareJournalOrder(
+  a: { id?: unknown; date?: unknown; createdAt?: unknown },
+  b: { id?: unknown; date?: unknown; createdAt?: unknown },
+): number {
+  return String(a.date ?? "").localeCompare(String(b.date ?? ""))
+    || String(a.createdAt ?? "").localeCompare(String(b.createdAt ?? ""))
+    || String(a.id ?? "").localeCompare(String(b.id ?? ""));
+}
+
 export interface AccountingJournalLine {
   side: "debit" | "credit";
   accountId: string;

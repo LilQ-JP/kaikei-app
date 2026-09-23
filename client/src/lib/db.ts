@@ -7,6 +7,7 @@
  */
 
 import { openDB, type DBSchema, type IDBPDatabase } from "idb";
+import { compareJournalOrder } from "@shared/accounting";
 
 const USE_REMOTE_DB = import.meta.env.PROD || import.meta.env.VITE_REMOTE_DB === "true";
 let csrfToken: string | undefined;
@@ -443,15 +444,15 @@ export async function getAllJournals(): Promise<JournalEntry[]> {
   if (USE_REMOTE_DB) return remoteRequest<JournalEntry[]>(remoteCollection("journals"));
   const db = await getDB();
   const all = await db.getAll("journals");
-  return all.sort((a, b) => b.date.localeCompare(a.date) || b.createdAt.localeCompare(a.createdAt));
+  return all.sort((a, b) => compareJournalOrder(b, a));
 }
 
 export async function getJournalsByDateRange(start: string, end: string): Promise<JournalEntry[]> {
-  if (USE_REMOTE_DB) return (await getAllJournals()).filter((journal) => journal.date >= start && journal.date <= end).sort((a, b) => a.date.localeCompare(b.date) || a.createdAt.localeCompare(b.createdAt));
+  if (USE_REMOTE_DB) return (await getAllJournals()).filter((journal) => journal.date >= start && journal.date <= end).sort(compareJournalOrder);
   const db = await getDB();
   const range = IDBKeyRange.bound(start, end);
   const results = await db.getAllFromIndex("journals", "by-date", range);
-  return results.sort((a, b) => a.date.localeCompare(b.date) || a.createdAt.localeCompare(b.createdAt));
+  return results.sort(compareJournalOrder);
 }
 
 export async function putJournal(entry: JournalEntry): Promise<void> {

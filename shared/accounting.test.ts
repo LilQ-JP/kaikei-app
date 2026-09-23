@@ -1,6 +1,14 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { calculateBalanceSheet, calculateProfitLoss, summarizeBalances, validateBalancedJournal } from "./accounting";
+import { calculateBalanceSheet, calculateProfitLoss, compareJournalOrder, summarizeBalances, validateBalancedJournal } from "./accounting";
+
+test("旧仕訳の作成日時が欠けていても安全に並べ替える", () => {
+  const old = { id: "old", date: "2026-01-01" };
+  const newer = { id: "newer", date: "2026-01-01", createdAt: "2026-01-02T00:00:00Z" };
+  const later = { id: "later", date: "2026-01-02" };
+  assert.deepEqual([later, newer, old].sort(compareJournalOrder), [old, newer, later]);
+  assert.doesNotThrow(() => compareJournalOrder(old, newer));
+});
 
 const accounts = [
   { id: "cash", code: "100", name: "現金", category: "asset" as const },

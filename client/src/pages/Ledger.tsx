@@ -19,7 +19,7 @@ import {
 } from "@/lib/db";
 import { formatYen, CATEGORY_LABELS } from "@/lib/utils";
 import { useEffect, useMemo, useState } from "react";
-import { isDebitNormal, journalLines } from "@shared/accounting";
+import { compareJournalOrder, isDebitNormal, journalLines } from "@shared/accounting";
 
 export default function Ledger() {
   const [journals, setJournals] = useState<JournalEntry[]>([]);
@@ -53,7 +53,7 @@ export default function Ledger() {
       .map((journal) => ({ journal, lines: journalLines(journal) }))
       .filter(({ lines }) => lines.some((line) => line.accountId === selectedAccountId))
       .map(({ journal, lines }) => ({ journal, lines, ownLines: lines.filter((line) => line.accountId === selectedAccountId) }))
-      .sort((a, b) => a.journal.date.localeCompare(b.journal.date) || a.journal.createdAt.localeCompare(b.journal.createdAt));
+      .sort((a, b) => compareJournalOrder(a.journal, b.journal));
 
     let balance = 0;
     const account = accountMap.get(selectedAccountId);
