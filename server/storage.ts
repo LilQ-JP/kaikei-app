@@ -1,8 +1,9 @@
 import { DatabaseSync } from "node:sqlite";
 import fs from "node:fs";
 import path from "node:path";
-import { createCipheriv, createDecipheriv, randomBytes, scryptSync, timingSafeEqual } from "node:crypto";
+import { createCipheriv, createDecipheriv, createHash, randomBytes, scryptSync, timingSafeEqual } from "node:crypto";
 import { z } from "zod";
+import { validateBalancedJournal, journalLines } from "../shared/accounting";
 
 export const RECORD_COLLECTIONS = [
   "accounts",
@@ -99,23 +100,62 @@ export function getRecord(collection: RecordCollection, id: string): unknown | u
 const journalSchema = z.object({
   id: z.string().min(1).max(128),
   date: z.string().regex(/^\d{4}-\d{2}-\d{2}$/),
-  debitAccountId: z.string().min(1).max(128),
-  creditAccountId: z.string().min(1).max(128),
-  amount: z.number().int().positive().safe(),
-  description: z.string().max(1000),
+  debitAccountId: z.string().min(1).max(128).optional(),
+  creditAccountId: z.string().min(1).max(128).optional(),
+  amount: z.number().int().positive().safe().optional(),
+  lines: z.array(z.object({
+    side: z.enum(["debit", "credit"]),
+    accountId: z.string().min(1).max(128),
+    amount: z.number().int().positive().safe(),
+  }).passthrough()).min(2).optional(),
+  description: z.string().max(1000).default(""),
   status: z.enum(["draft", "posted", "reversed"]).optional(),
   reversalOf: z.string().min(1).max(128).optional(),
   sourceKey: z.string().min(1).max(256).optional(),
 }).passthrough();
 
+function assertFiscalYearOpen(date: string) {
+  const year = date.slice(0, 4);
+  const fiscalYear = getRecord("fiscalYears", year) as { status?: string; closed?: boolean } | undefined;
+  if (fiscalYear?.status === "closed" || fiscalYear?.closed === true) {
+    throw new Error(`${year}年度は締め済みのため変更できません`);
+  }
+}
+
 function assertRecordIsValid(collection: RecordCollection, id: string, data: unknown) {
   if (!data || typeof data !== "object" || Array.isArray(data)) throw new Error("保存データが不正です");
   const record = data as Record<string, unknown>;
   if (record.id !== id) throw new Error("URLとデータのIDが一致しません");
+  if (collection === "accounts") {
+    const account = z.object({ id: z.string().min(1), code: z.string().min(1), category: z.enum(["asset", "liability", "equity", "income", "expense"]), normalBalance: z.enum(["debit", "credit"]).optional() }).passthrough().parse(data);
+    const existing = getRecord("accounts", id) as { code?: string; category?: string; normalBalance?: string } | undefined;
+    if (existing && (existing.code !== account.code || existing.category !== account.category || existing.normalBalance !== account.normalBalance)) {
+      const referenced = (listRecords("journals") as Array<Parameters<typeof journalLines>[0]>).some((journal) => journalLines(journal).some((line) => line.accountId === id));
+      if (referenced) throw new Error("仕訳で使用中の勘定科目は区分・コードを変更できません");
+    }
+    return;
+  }
+  if (collection === "fiscalYears") {
+    if (!/^\d{4}$/.test(id)) throw new Error("年度が不正です");
+    const existing = getRecord("fiscalYears", id) as { status?: string; closed?: boolean } | undefined;
+    const wasClosed = existing?.status === "closed" || existing?.closed === true;
+    const isClosed = record.status === "closed" || record.closed === true;
+    if (wasClosed && !isClosed && (typeof record.unlockReason !== "string" || record.unlockReason.trim().length < 10)) {
+      throw new Error("年度締め解除には10文字以上の理由が必要です");
+    }
+    if (record.status !== undefined && record.status !== "open" && record.status !== "closed") throw new Error("年度状態が不正です");
+    return;
+  }
   if (collection !== "journals") return;
   const journal = journalSchema.parse(data);
-  if (journal.debitAccountId === journal.creditAccountId) throw new Error("借方と貸方に同じ科目は指定できません");
-  for (const accountId of [journal.debitAccountId, journal.creditAccountId]) {
+  const date = new Date(`${journal.date}T00:00:00Z`);
+  if (Number.isNaN(date.getTime()) || date.toISOString().slice(0, 10) !== journal.date) throw new Error("実在しない日付です");
+  const balanceError = validateBalancedJournal(journal);
+  if (balanceError) throw new Error(balanceError);
+  assertFiscalYearOpen(journal.date);
+  const existing = getRecord("journals", id) as { date?: string; status?: unknown } | undefined;
+  if (existing?.date) assertFiscalYearOpen(existing.date);
+  for (const accountId of Array.from(new Set(journalLines(journal).map((line) => line.accountId)))) {
     if (!getRecord("accounts", accountId)) throw new Error("存在しない勘定科目は使用できません");
   }
   if (journal.sourceKey) {
@@ -125,27 +165,48 @@ function assertRecordIsValid(collection: RecordCollection, id: string, data: unk
   if (journal.reversalOf && !getRecord("journals", journal.reversalOf)) {
     throw new Error("訂正対象の仕訳が見つかりません");
   }
-  const existing = getRecord("journals", id) as { status?: unknown } | undefined;
+  if (journal.reversalOf) {
+    const original = getRecord("journals", journal.reversalOf) as Parameters<typeof journalLines>[0];
+    const reversed = journalLines(original).map((line) => `${line.side === "debit" ? "credit" : "debit"}:${line.accountId}:${line.amount}`).sort();
+    const actual = journalLines(journal).map((line) => `${line.side}:${line.accountId}:${line.amount}`).sort();
+    if (reversed.length !== actual.length || reversed.some((line, index) => line !== actual[index])) throw new Error("反対仕訳の明細が元仕訳と一致しません");
+    const duplicateReversal = database.prepare("SELECT id FROM records WHERE collection = 'journals' AND id != ? AND json_extract(data, '$.reversalOf') = ?").get(id, journal.reversalOf) as { id?: string } | undefined;
+    if (duplicateReversal) throw new Error("この仕訳はすでに反対仕訳で訂正されています");
+  }
   if (existing && (existing.status ?? "posted") !== "draft") {
     throw new Error("確定済み仕訳は編集できません。訂正は反対仕訳で行ってください");
   }
 }
 
 export function putRecord(collection: RecordCollection, id: string, data: unknown, userId: string) {
-  assertRecordIsValid(collection, id, data);
-  const timestamp = now();
-  const serialized = JSON.stringify(data);
-  database.prepare(`
-    INSERT INTO records(collection, id, data, updated_at) VALUES (?, ?, ?, ?)
-    ON CONFLICT(collection, id) DO UPDATE SET data = excluded.data, updated_at = excluded.updated_at
-  `).run(collection, id, serialized, timestamp);
-  database.prepare("INSERT INTO audit_events(id, user_id, action, collection, record_id, occurred_at, data) VALUES (?, ?, ?, ?, ?, ?, ?)")
-    .run(randomBytes(16).toString("hex"), userId, "upsert", collection, id, timestamp, serialized);
+  database.exec("BEGIN IMMEDIATE");
+  try {
+    assertRecordIsValid(collection, id, data);
+    const timestamp = now();
+    const serialized = JSON.stringify(data);
+    database.prepare(`
+      INSERT INTO records(collection, id, data, updated_at) VALUES (?, ?, ?, ?)
+      ON CONFLICT(collection, id) DO UPDATE SET data = excluded.data, updated_at = excluded.updated_at
+    `).run(collection, id, serialized, timestamp);
+    database.prepare("INSERT INTO audit_events(id, user_id, action, collection, record_id, occurred_at, data) VALUES (?, ?, ?, ?, ?, ?, ?)")
+      .run(randomBytes(16).toString("hex"), userId, "upsert", collection, id, timestamp, serialized);
+    database.exec("COMMIT");
+  } catch (error) {
+    database.exec("ROLLBACK");
+    throw error;
+  }
 }
 
 export function deleteRecord(collection: RecordCollection, id: string, userId: string) {
+  if (collection === "fiscalYears") throw new Error("年度設定は削除できません。解除理由を記録して開き直してください");
+  if (collection === "accounts") {
+    const referenced = (listRecords("journals") as Array<Parameters<typeof journalLines>[0]>).some((journal) =>
+      journalLines(journal).some((line) => line.accountId === id));
+    if (referenced) throw new Error("仕訳で使用中の勘定科目は削除できません");
+  }
   if (collection === "journals") {
-    const existing = getRecord("journals", id) as { status?: unknown } | undefined;
+    const existing = getRecord("journals", id) as { date?: string; status?: unknown } | undefined;
+    if (existing?.date) assertFiscalYearOpen(existing.date);
     if (existing && (existing.status ?? "posted") !== "draft") {
       throw new Error("確定済み仕訳は削除できません。訂正は反対仕訳で行ってください");
     }
@@ -158,6 +219,8 @@ export function deleteRecord(collection: RecordCollection, id: string, userId: s
 
 export function clearRecords(collection: RecordCollection, userId: string) {
   if (collection === "journals") throw new Error("仕訳帳の一括削除は許可されていません");
+  if (collection === "fiscalYears") throw new Error("年度設定の一括削除は許可されていません");
+  if (collection === "accounts" && listRecords("journals").length > 0) throw new Error("仕訳があるため勘定科目を一括削除できません");
   const timestamp = now();
   database.prepare("DELETE FROM records WHERE collection = ?").run(collection);
   database.prepare("INSERT INTO audit_events(id, user_id, action, collection, occurred_at) VALUES (?, ?, ?, ?, ?)")
@@ -236,13 +299,27 @@ export function deleteSession(token: string | undefined) {
 export function createEncryptedBackup(userId: string): { file: string; createdAt: string; recordCount: number } {
   const createdAt = now();
   const records = database.prepare("SELECT collection, id, data, updated_at FROM records ORDER BY collection, id").all();
-  const audit = database.prepare("SELECT action, collection, record_id, occurred_at FROM audit_events ORDER BY occurred_at DESC LIMIT 1000").all();
-  const payload = Buffer.from(JSON.stringify({ version: 1, createdAt, records, audit }));
+  const audit = database.prepare("SELECT id, user_id, action, collection, record_id, occurred_at, data FROM audit_events ORDER BY occurred_at, id").all();
+  const users = database.prepare("SELECT id, username, password_hash, created_at FROM users ORDER BY id").all();
+  const documents: Array<{ name: string; sha256: string; data: string }> = [];
+  function collectDocuments(directory: string) {
+    for (const entry of fs.readdirSync(directory, { withFileTypes: true })) {
+      const fullPath = path.join(directory, entry.name);
+      if (entry.isDirectory()) collectDocuments(fullPath);
+      else if (entry.isFile()) {
+        const raw = fs.readFileSync(fullPath);
+        documents.push({ name: path.relative(dataPaths.documents, fullPath).split(path.sep).join("/"), sha256: createHash("sha256").update(raw).digest("hex"), data: raw.toString("base64") });
+      } else throw new Error("証憑領域に通常ファイル以外が含まれています");
+    }
+  }
+  collectDocuments(dataPaths.documents);
+  documents.sort((a, b) => a.name.localeCompare(b.name));
+  const payload = Buffer.from(JSON.stringify({ version: 2, createdAt, records, audit, users, documents }));
   const iv = randomBytes(12);
   const cipher = createCipheriv("aes-256-gcm", getBackupKey(), iv);
   const encrypted = Buffer.concat([cipher.update(payload), cipher.final()]);
   const tag = cipher.getAuthTag();
-  const filename = `kaikei-${createdAt.replace(/[-:.TZ]/g, "").slice(0, 14)}.backup`;
+  const filename = `kaikei-${createdAt.replace(/[-:.TZ]/g, "").slice(0, 14)}-${randomBytes(4).toString("hex")}.backup`;
   const file = path.join(dataPaths.backups, filename);
   fs.writeFileSync(file, Buffer.concat([Buffer.from("LKQ1"), iv, tag, encrypted]), { mode: 0o600 });
   database.prepare("INSERT INTO audit_events(id, user_id, action, occurred_at, data) VALUES (?, ?, ?, ?, ?)")
@@ -261,7 +338,9 @@ type BackupPayload = {
   version: number;
   createdAt: string;
   records: Array<{ collection: string; id: string; data: string; updated_at: string }>;
-  audit: Array<{ action: string; collection?: string; record_id?: string; occurred_at: string }>;
+  audit: Array<{ id?: string; user_id?: string; action: string; collection?: string; record_id?: string; occurred_at: string; data?: string }>;
+  users?: Array<{ id: string; username: string; password_hash: string; created_at: string }>;
+  documents?: Array<{ name: string; sha256: string; data: string }>;
 };
 
 function readBackupPayload(name: string): BackupPayload {
@@ -283,15 +362,23 @@ function readBackupPayload(name: string): BackupPayload {
   }
   if (!value || typeof value !== "object") throw new Error("バックアップ内容が不正です");
   const payload = value as Partial<BackupPayload>;
-  if (payload.version !== 1 || !Array.isArray(payload.records) || !Array.isArray(payload.audit) || typeof payload.createdAt !== "string") {
+  if (![1, 2].includes(payload.version ?? -1) || !Array.isArray(payload.records) || !Array.isArray(payload.audit) || typeof payload.createdAt !== "string") {
     throw new Error("バックアップ内容が不正です");
   }
+  if (payload.version === 2 && (!Array.isArray(payload.documents) || !Array.isArray(payload.users))) throw new Error("バックアップ内容が不正です");
   for (const record of payload.records) {
     if (!record || typeof record.collection !== "string" || typeof record.id !== "string" || typeof record.data !== "string" || typeof record.updated_at !== "string") {
       throw new Error("バックアップ内のレコードが不正です");
     }
     assertCollection(record.collection);
     JSON.parse(record.data);
+  }
+  for (const document of payload.documents ?? []) {
+    if (!document || typeof document.name !== "string" || !/^[^\\/]+(?:\/[^\\/]+)*$/.test(document.name) || document.name.split("/").some((part) => part === "." || part === "..") || !/^[a-f0-9]{64}$/.test(document.sha256) || typeof document.data !== "string") {
+      throw new Error("バックアップ内の証憑が不正です");
+    }
+    const raw = Buffer.from(document.data, "base64");
+    if (createHash("sha256").update(raw).digest("hex") !== document.sha256) throw new Error("証憑のハッシュが一致しません");
   }
   return payload as BackupPayload;
 }
@@ -329,7 +416,13 @@ export function verifyEncryptedBackup(name: string) {
     const recordCount = (verificationDb.prepare("SELECT COUNT(*) AS count FROM records").get() as { count: number }).count;
     const auditEventCount = (verificationDb.prepare("SELECT COUNT(*) AS count FROM audit_events").get() as { count: number }).count;
     if (recordCount !== payload.records.length || auditEventCount !== payload.audit.length) throw new Error("復元後の件数照合に失敗しました");
-    return { name, createdAt: payload.createdAt, recordCount, auditEventCount, verifiedAt: now() };
+    for (const document of payload.documents ?? []) {
+      const destination = path.join(tempRoot, "documents", ...document.name.split("/"));
+      fs.mkdirSync(path.dirname(destination), { recursive: true });
+      fs.writeFileSync(destination, Buffer.from(document.data, "base64"));
+      if (createHash("sha256").update(fs.readFileSync(destination)).digest("hex") !== document.sha256) throw new Error("証憑の復元検証に失敗しました");
+    }
+    return { name, createdAt: payload.createdAt, recordCount, auditEventCount, documentCount: payload.documents?.length ?? 0, verifiedAt: now(), legacyBackup: payload.version === 1 };
   } finally {
     verificationDb?.close();
     fs.rmSync(tempRoot, { recursive: true, force: true });

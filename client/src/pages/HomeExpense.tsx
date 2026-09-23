@@ -172,6 +172,7 @@ export default function HomeExpense() {
           amount: calc.personalAmount,
           description: `家事按分 ${calc.accountName} 個人使用分 ${100 - calc.rule.businessRatio}%`,
           memo: `家事按分自動仕訳 ${year}年度 ${sourceKey}`,
+          sourceKey,
           createdAt: now,
           updatedAt: now,
         };

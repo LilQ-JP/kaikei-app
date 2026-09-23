@@ -69,6 +69,7 @@ export interface JournalEntry {
   debitAccountId: string;
   creditAccountId: string;
   amount: number;
+  lines?: Array<{ side: "debit" | "credit"; accountId: string; amount: number }>;
   description: string;
   memo?: string;
   receiptId?: string;

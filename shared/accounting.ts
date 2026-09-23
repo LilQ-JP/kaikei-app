@@ -66,6 +66,7 @@ export function validateBalancedJournal(journal: AccountingJournal): string | nu
     if (!Number.isSafeInteger(line.amount) || line.amount <= 0) return "金額は1円以上の整数で入力してください";
     if (line.side === "debit") debitTotal += line.amount;
     else creditTotal += line.amount;
+    if (!Number.isSafeInteger(debitTotal) || !Number.isSafeInteger(creditTotal)) return "仕訳合計が安全に計算できる金額を超えています";
   }
   if (debitTotal === 0 || creditTotal === 0) return "借方・貸方の両方が必要です";
   if (debitTotal !== creditTotal) return "借方合計と貸方合計が一致しません";

@@ -259,6 +259,7 @@ export default function FixedAssets() {
           amount: sc.depreciationThisYear,
           description: `減価償却 ${sc.asset.name} (${sc.asset.method === "straight-line" ? "定額法" : "定率法"})`,
           memo: `固定資産台帳より自動仕訳 ${year}年度 ${sourceKey}`,
+          sourceKey,
           createdAt: now,
           updatedAt: now,
         };

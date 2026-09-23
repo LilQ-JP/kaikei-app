@@ -21,11 +21,11 @@ import {
   type JournalEntry,
   type BusinessProfile,
 } from "@/lib/db";
-import { formatYen, downloadFile, getFiscalYearRange } from "@/lib/utils";
+import { formatYen, downloadFile } from "@/lib/utils";
 import { Download, FileText, Info } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
 import { toast } from "sonner";
-import { calculateProfitLoss } from "@shared/accounting";
+import { calculateBalanceSheet, calculateProfitLoss, journalLines, validateBalancedJournal } from "@shared/accounting";
 import { Link } from "wouter";
 
 // 青色申告決算書の経費科目マッピング
@@ -75,11 +75,25 @@ export default function TaxFiling() {
     load();
   }, []);
 
-  const fiscalRange = useMemo(() => getFiscalYearRange(year, profile?.fiscalYearStart || 1), [year, profile?.fiscalYearStart]);
+  // 個人事業主の所得税は暦年で集計する。事業プロフィールの任意の期首月を適用しない。
+  const fiscalRange = useMemo(() => ({ start: `${year}-01-01`, end: `${year}-12-31` }), [year]);
+  const postedJournals = useMemo(() => journals.filter((j) => j.status !== "draft"), [journals]);
   const yearJournals = useMemo(
-    () => journals.filter((j) => j.date >= fiscalRange.start && j.date <= fiscalRange.end),
-    [journals, fiscalRange]
+    () => postedJournals.filter((j) => j.date >= fiscalRange.start && j.date <= fiscalRange.end),
+    [postedJournals, fiscalRange]
   );
+
+  const filingErrors = useMemo(() => {
+    const errors: string[] = [];
+    const knownAccounts = new Set(accounts.map((account) => account.id));
+    const throughYearEnd = postedJournals.filter((j) => j.date <= fiscalRange.end);
+    for (const journal of throughYearEnd) {
+      if (validateBalancedJournal(journal)) errors.push(`仕訳 ${journal.date} に借貸不一致または不正な金額があります`);
+      if (journalLines(journal).some((line) => !knownAccounts.has(line.accountId))) errors.push(`仕訳 ${journal.date} に未登録の勘定科目があります`);
+    }
+    if (errors.length === 0 && !calculateBalanceSheet(accounts, throughYearEnd, yearJournals).isBalanced) errors.push("貸借対照表が一致しません");
+    return errors;
+  }, [accounts, postedJournals, fiscalRange, yearJournals]);
 
   const codeToAccountId = useMemo(() => {
     const map = new Map<string, string>();
@@ -121,7 +135,7 @@ export default function TaxFiling() {
     const expenseItems = BLUE_FORM_EXPENSE_ITEMS.map((item) => {
       const amount = item.codes.reduce((sum, code) => sum + (expenseByCode.get(code) || 0), 0);
       return { label: item.label, amount };
-    }).filter((item) => item.amount > 0);
+    }).filter((item) => item.amount !== 0);
 
     // Other expenses not in the standard list
     const standardCodes = new Set(BLUE_FORM_EXPENSE_ITEMS.flatMap((i) => i.codes));
@@ -129,7 +143,7 @@ export default function TaxFiling() {
     expenseByCode.forEach((amount, code) => {
       if (!standardCodes.has(code)) otherExpenses += amount;
     });
-    if (otherExpenses > 0) {
+    if (otherExpenses !== 0) {
       expenseItems.push({ label: "その他経費", amount: otherExpenses });
     }
 
@@ -158,6 +172,10 @@ export default function TaxFiling() {
   }, [yearJournals, accounts, filingType, blueDeduction]);
 
   function handleExport() {
+    if (filingErrors.length > 0) {
+      toast.error(`申告用CSVを出力できません: ${filingErrors[0]}`);
+      return;
+    }
     const lines: string[] = [];
     lines.push(`${filingType === "blue" ? "青色申告決算書" : "収支内訳書"} ${fiscalRange.start}〜${fiscalRange.end}`);
     lines.push("");
@@ -216,11 +234,18 @@ export default function TaxFiling() {
               </SelectContent>
             </Select>
           )}
-          <Button variant="outline" size="sm" onClick={handleExport}>
+          <Button variant="outline" size="sm" onClick={handleExport} disabled={filingErrors.length > 0}>
             <Download className="h-4 w-4 mr-1" />CSV
           </Button>
         </div>
       </div>
+
+      {filingErrors.length > 0 && (
+        <div role="alert" className="mb-4 rounded-lg border border-red-300 bg-red-50 p-3 text-[12px] text-red-800">
+          <p className="font-semibold">帳簿に不整合があるため、申告用CSVを出力できません。</p>
+          {filingErrors.slice(0, 5).map((error, index) => <p key={`${error}-${index}`} className="mt-1">{error}</p>)}
+        </div>
+      )}
 
       {/* Info banner */}
       <div className="mb-4 flex items-start gap-2 rounded-lg bg-blue-50 p-3 text-[12px] text-blue-700">
@@ -230,7 +255,7 @@ export default function TaxFiling() {
             {filingType === "blue" ? "青色申告決算書" : "収支内訳書"}の集計データです
           </p>
           <p className="mt-0.5 text-blue-600">
-            この集計を元に確定申告書を作成してください。e-Taxや税務署への提出には国税庁の書式をご利用ください。
+            この画面は暦年の参考集計です。正式な申告前に証憑、過年度残高、税区分、控除要件を照合してください。e-Taxや税務署への提出には国税庁の書式をご利用ください。
             {!profile && (
               <Link href="/profile">
                 <span className="ml-1 underline font-semibold">事業者情報を設定する →</span>
