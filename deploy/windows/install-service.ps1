@@ -10,6 +10,16 @@ $serviceName = "LilQKaikei"
 $source = Split-Path -Parent $PSScriptRoot | Split-Path -Parent
 $build = Join-Path $source "dist"
 
+# Program Files and the SYSTEM startup task require elevation. Relaunch this
+# same script from its source directory so upgrades work from a normal shell.
+$identity = [Security.Principal.WindowsIdentity]::GetCurrent()
+$principal = [Security.Principal.WindowsPrincipal]::new($identity)
+if (-not $principal.IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)) {
+  $arguments = @("-NoProfile", "-ExecutionPolicy", "Bypass", "-File", "`"$PSCommandPath`"")
+  $elevated = Start-Process -FilePath "powershell.exe" -ArgumentList $arguments -WorkingDirectory $source -Verb RunAs -Wait -PassThru
+  exit $elevated.ExitCode
+}
+
 if (-not (Test-Path (Join-Path $build "index.js")) -or
     -not (Test-Path (Join-Path $build "public\index.html"))) {
   throw "Build output is missing. Run pnpm.cmd install and pnpm.cmd build before installing."
