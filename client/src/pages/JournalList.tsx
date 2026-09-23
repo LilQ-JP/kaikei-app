@@ -38,7 +38,7 @@ import {
   type Receipt,
 } from "@/lib/db";
 import { formatYen, journalsToCSV, downloadFile } from "@/lib/utils";
-import { Download, Plus, Search, Trash2, Camera, Pencil, CreditCard, FileText, RotateCcw } from "lucide-react";
+import { Download, Plus, Search, Trash2, Camera, Pencil, CreditCard, FileText, RotateCcw, ArrowDownUp } from "lucide-react";
 import { useEffect, useMemo, useState, useCallback } from "react";
 import { Link } from "wouter";
 import { toast } from "sonner";
@@ -52,6 +52,7 @@ export default function JournalList() {
   const [journals, setJournals] = useState<JournalEntry[]>([]);
   const [accounts, setAccounts] = useState<AccountItem[]>([]);
   const [search, setSearch] = useState("");
+  const [oldestFirst, setOldestFirst] = useState(true);
   const [loading, setLoading] = useState(true);
   const [receiptCache, setReceiptCache] = useState<Record<string, Receipt>>({});
   const [previewReceipt, setPreviewReceipt] = useState<Receipt | null>(null);
@@ -86,9 +87,9 @@ export default function JournalList() {
   }, [accounts]);
 
   const filtered = useMemo(() => {
-    if (!search) return journals;
     const q = search.toLowerCase();
     return journals.filter((j) => {
+      if (!q) return true;
       const lines = journalLines(j);
       const debitNames = lines.filter((line) => line.side === "debit").map((line) => accountMap.get(line.accountId)?.name || "").join(" ");
       const creditNames = lines.filter((line) => line.side === "credit").map((line) => accountMap.get(line.accountId)?.name || "").join(" ");
@@ -100,8 +101,12 @@ export default function JournalList() {
         String(j.amount).includes(q) ||
         (j.paymentMethod && j.paymentMethod.toLowerCase().includes(q))
       );
+    }).sort((a, b) => {
+      const dateOrder = a.date.localeCompare(b.date);
+      const tieOrder = a.createdAt.localeCompare(b.createdAt) || a.id.localeCompare(b.id);
+      return (oldestFirst ? 1 : -1) * (dateOrder || tieOrder);
     });
-  }, [journals, search, accountMap]);
+  }, [journals, search, accountMap, oldestFirst]);
 
   async function handleDelete(id: string) {
     await deleteJournal(id);
@@ -165,6 +170,10 @@ export default function JournalList() {
       <div className="flex items-center justify-between mb-4">
         <h1 className="text-xl font-bold">仕訳帳</h1>
         <div className="flex gap-2">
+          <Button variant="outline" size="sm" onClick={() => setOldestFirst((value) => !value)} aria-label="日付順を切り替え">
+            <ArrowDownUp className="h-4 w-4 mr-1" />
+            {oldestFirst ? "古い日付から" : "新しい日付から"}
+          </Button>
           <Button variant="outline" size="sm" onClick={handleExportCSV} disabled={filtered.length === 0}>
             <Download className="h-4 w-4 mr-1" />
             CSV
@@ -198,7 +207,7 @@ export default function JournalList() {
             </div>
           ) : (
             <div className="overflow-x-auto">
-              <table className="w-full text-[13px]">
+              <table className="w-full text-sm">
                 <thead>
                   <tr className="border-b bg-muted/30">
                     <th className="px-4 py-2.5 text-left font-bold text-muted-foreground">日付</th>
@@ -224,23 +233,23 @@ export default function JournalList() {
                     const creditLines = lines.filter((line) => line.side === "credit");
                     const hasReceipt = !!j.receiptId;
                     return (
-                      <tr key={j.id} className="hover:bg-muted/20 transition-colors">
-                        <td className="px-4 py-2.5 font-mono text-muted-foreground whitespace-nowrap">
+                      <tr key={j.id} className="hover:bg-muted/20 transition-colors even:bg-muted/[0.12]">
+                        <td className="px-4 py-3 font-mono text-muted-foreground whitespace-nowrap">
                           {j.date}
                         </td>
-                        <td className="px-4 py-2.5 font-semibold whitespace-nowrap">
+                        <td className="px-4 py-3 font-semibold whitespace-nowrap">
                           {debitLines.length === 0 ? "—" : debitLines.map((line, index) => <div key={`${line.accountId}-${index}`}>{accountMap.get(line.accountId)?.name || "不明科目"}{j.lines?.length ? <span className="ml-1 text-[11px] font-normal text-muted-foreground">{formatYen(line.amount)}</span> : null}</div>)}
                         </td>
-                        <td className="px-4 py-2.5 font-semibold whitespace-nowrap">
+                        <td className="px-4 py-3 font-semibold whitespace-nowrap">
                           {creditLines.length === 0 ? "—" : creditLines.map((line, index) => <div key={`${line.accountId}-${index}`}>{accountMap.get(line.accountId)?.name || "不明科目"}{j.lines?.length ? <span className="ml-1 text-[11px] font-normal text-muted-foreground">{formatYen(line.amount)}</span> : null}</div>)}
                         </td>
-                        <td className="px-4 py-2.5 text-right font-mono font-bold whitespace-nowrap">
+                        <td className="px-4 py-3 text-right font-mono font-bold whitespace-nowrap">
                           {formatYen(j.amount)}
                         </td>
-                        <td className="px-4 py-2.5 text-muted-foreground truncate max-w-[200px]">
+                        <td className="px-4 py-3 text-muted-foreground min-w-[220px] max-w-[360px] whitespace-normal break-words">
                           {j.description || "—"}
                         </td>
-                        <td className="px-4 py-2.5 whitespace-nowrap">
+                        <td className="px-4 py-3 whitespace-nowrap">
                           {j.paymentMethod ? (
                             <span className="inline-flex items-center gap-1 text-[11px] bg-muted/50 dark:bg-muted/30 rounded-full px-2 py-0.5 font-medium">
                               <CreditCard className="h-3 w-3 text-muted-foreground" />
@@ -296,7 +305,16 @@ export default function JournalList() {
                           </>
                         ) : (
                           <>
-                            <td className="px-2 py-2.5 text-center text-[11px] text-muted-foreground">確定</td>
+                            <td className="px-2 py-2.5 text-center">
+                              {!j.sourceKey && !j.tags?.length && !j.reversalOf ? (
+                                <Link href={`/journals/edit/${j.id}`}>
+                                  <Button variant="ghost" size="sm" className="h-8 gap-1 px-2 text-primary" aria-label="仕訳を訂正編集">
+                                    <Pencil className="h-3.5 w-3.5" />
+                                    <span className="text-xs">訂正編集</span>
+                                  </Button>
+                                </Link>
+                              ) : <span className="text-[11px] text-muted-foreground">確定</span>}
+                            </td>
                             <td className="px-2 py-2.5">
                               <AlertDialog>
                                 <AlertDialogTrigger asChild>

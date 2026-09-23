@@ -154,6 +154,8 @@ export default function JournalForm() {
   const [pastJournals, setPastJournals] = useState<JournalEntry[]>([]);
   const [saving, setSaving] = useState(false);
   const [loading, setLoading] = useState(true);
+  const [correctionTarget, setCorrectionTarget] = useState<JournalEntry | null>(null);
+  const isCorrection = !!correctionTarget;
 
   // Mode: simple (通常仕訳) or compound (複合仕訳)
   const [mode, setMode] = useState<"simple" | "compound">("simple");
@@ -184,6 +186,14 @@ export default function JournalForm() {
       if (editId) {
         const existing = journals.find((j) => j.id === editId);
         if (existing) {
+          const isPosted = existing.status !== "draft";
+          if (isPosted && (existing.sourceKey || existing.tags?.length || existing.lines?.length || existing.reversalOf)) {
+            toast.error("請求書連動・複合仕訳・訂正履歴のある仕訳は、この画面から編集できません");
+            navigate("/journals");
+            setLoading(false);
+            return;
+          }
+          if (isPosted) setCorrectionTarget(existing);
           setEntries([
             {
               key: existing.id,
@@ -398,7 +408,7 @@ export default function JournalForm() {
         }
 
         for (const e of entries) {
-          const journalId = isEdit ? e.key : crypto.randomUUID();
+          const journalId = isCorrection ? crypto.randomUUID() : isEdit ? e.key : crypto.randomUUID();
           let receiptId: string | undefined = e.existingReceiptId;
 
           if (e.receiptFile) {
@@ -418,7 +428,9 @@ export default function JournalForm() {
             await putReceipt(receipt);
           }
 
+          const original = correctionTarget;
           const journal: JournalEntry = {
+            ...(isCorrection && original ? original : {}),
             id: journalId,
             date: e.date,
             debitAccountId: e.debitAccountId,
@@ -432,12 +444,35 @@ export default function JournalForm() {
             taxIncluded: true,
             receiptId,
             status: "posted",
-            createdAt: isEdit ? (pastJournals.find((j) => j.id === journalId)?.createdAt || now) : now,
+            createdAt: isCorrection ? now : isEdit ? (pastJournals.find((j) => j.id === journalId)?.createdAt || now) : now,
             updatedAt: now,
           };
-          await putJournal(journal);
+          if (isCorrection && original) {
+            const reversal: JournalEntry = {
+              ...original,
+              id: crypto.randomUUID(),
+              debitAccountId: original.creditAccountId,
+              creditAccountId: original.debitAccountId,
+              ...(original.lines ? { lines: original.lines.map((line) => ({ ...line, side: line.side === "debit" ? "credit" as const : "debit" as const })) } : {}),
+              description: `訂正取消: ${original.description || "元仕訳"}`,
+              receiptId: undefined,
+              sourceKey: undefined,
+              status: "posted",
+              reversalOf: original.id,
+              revision: (original.revision || 0) + 1,
+              createdAt: now,
+              updatedAt: now,
+            };
+            journal.reversalOf = undefined;
+            journal.sourceKey = undefined;
+            journal.status = "posted";
+            journal.revision = (original.revision || 0) + 1;
+            await putJournalsAtomic([reversal, journal]);
+          } else {
+            await putJournal(journal);
+          }
         }
-        toast.success(isEdit ? "仕訳を更新しました" : `${entries.length}件の仕訳を保存しました`);
+        toast.success(isCorrection ? "元仕訳を残し、訂正仕訳と修正版を記録しました" : isEdit ? "仕訳を更新しました" : `${entries.length}件の仕訳を保存しました`);
       } else {
         // Compound mode
         const ce = compoundEntry;
@@ -699,7 +734,7 @@ export default function JournalForm() {
               <ArrowLeft className="h-4 w-4" />
             </Button>
           )}
-          <h1 className="text-xl font-bold">{isEdit ? "仕訳を編集" : "仕訳入力"}</h1>
+          <h1 className="text-xl font-bold">{isCorrection ? "確定仕訳の訂正" : isEdit ? "仕訳を編集" : "仕訳入力"}</h1>
           {!isEdit && (
             <Tooltip>
               <TooltipTrigger asChild>
@@ -730,10 +765,13 @@ export default function JournalForm() {
           )}
           <Button size="sm" onClick={handleSave} disabled={saving}>
             <Save className="h-4 w-4 mr-1" />
-            {saving ? "保存中..." : isEdit ? "更新" : "保存"}
+            {saving ? "保存中..." : isCorrection ? "訂正を記録" : isEdit ? "更新" : "保存"}
           </Button>
         </div>
       </div>
+
+      {!isEdit && <p className="mb-4 text-xs text-muted-foreground">摘要は後から見返しやすい日本語がおすすめです。英語でも保存できます。</p>}
+      {isCorrection && <div className="mb-4 rounded-md border border-amber-300 bg-amber-50 p-3 text-sm text-amber-950 dark:border-amber-800 dark:bg-amber-950/30 dark:text-amber-100">確定済みの元仕訳は変更せず、保存時に反対仕訳と修正版を同時に記録します。摘要は日本語で具体的に書くと後から確認しやすくなります。</div>}
 
       {/* Mode tabs */}
       {!isEdit && (
@@ -834,7 +872,7 @@ export default function JournalForm() {
                   {/* Description */}
                   <div>
                     <Label className="text-[12px] font-semibold">
-                      摘要
+                      摘要（日本語推奨・英語可）
                       {aiEnabled && !isEdit && (
                         <span className="ml-2 text-[10px] font-normal text-primary">
                           <Sparkles className="inline h-3 w-3 mr-0.5 -mt-0.5" />
@@ -1078,7 +1116,7 @@ export default function JournalForm() {
         </Button>
         <Button onClick={handleSave} disabled={saving}>
           <Save className="h-4 w-4 mr-1" />
-          {saving ? "保存中..." : isEdit ? "更新" : mode === "compound" ? "複合仕訳を保存" : `${entries.length}件を保存`}
+          {saving ? "保存中..." : isCorrection ? "訂正を記録" : isEdit ? "更新" : mode === "compound" ? "複合仕訳を保存" : `${entries.length}件を保存`}
         </Button>
       </div>
 
