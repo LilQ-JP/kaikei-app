@@ -8,12 +8,23 @@ param(
 $ErrorActionPreference = "Stop"
 $serviceName = "LilQKaikei"
 $source = Split-Path -Parent $PSScriptRoot | Split-Path -Parent
+$build = Join-Path $source "dist"
+
+if (-not (Test-Path (Join-Path $build "index.js")) -or
+    -not (Test-Path (Join-Path $build "public\index.html"))) {
+  throw "Build output is missing. Run pnpm.cmd install and pnpm.cmd build before installing."
+}
+
+$existingTask = Get-ScheduledTask -TaskName $serviceName -ErrorAction SilentlyContinue
+if ($existingTask -and $existingTask.State -eq "Running") {
+  Stop-ScheduledTask -TaskName $serviceName
+}
 
 New-Item -ItemType Directory -Force -Path $InstallRoot, $DataRoot | Out-Null
 # dist/index.js is bundled with its server dependencies.  Installing a task
 # which points at Program Files without node_modules makes it fail after a
 # reboot, so only the self-contained build output is deployed.
-Copy-Item -Path (Join-Path $source "dist") -Destination $InstallRoot -Recurse -Force
+Copy-Item -Path $build -Destination $InstallRoot -Recurse -Force
 
 $launcher = Join-Path $InstallRoot "launcher.mjs"
 @(
@@ -35,5 +46,24 @@ $settings = New-ScheduledTaskSettingsSet -StartWhenAvailable -ExecutionTimeLimit
 $task = New-ScheduledTask -Action $action -Trigger $trigger -Principal $principal -Settings $settings
 Register-ScheduledTask -TaskName $serviceName -InputObject $task -Force | Out-Null
 Start-ScheduledTask -TaskName $serviceName
+
+$healthy = $false
+for ($attempt = 0; $attempt -lt 30; $attempt++) {
+  Start-Sleep -Milliseconds 500
+  if ((Get-ScheduledTask -TaskName $serviceName).State -ne "Running") { continue }
+  try {
+    $response = Invoke-RestMethod -Uri "http://127.0.0.1:$Port/api/v1/health" -TimeoutSec 2
+    $listener = Get-NetTCPConnection -LocalPort $Port -State Listen -ErrorAction SilentlyContinue |
+      Where-Object { $_.LocalAddress -eq "127.0.0.1" }
+    if ($response.ok -eq $true -and $response.storage -eq "sqlite" -and $listener) {
+      $healthy = $true
+      break
+    }
+  } catch { }
+}
+if (-not $healthy) {
+  $lastResult = (Get-ScheduledTaskInfo -TaskName $serviceName).LastTaskResult
+  throw "LilQKaikei did not start on 127.0.0.1:$Port (task result: $lastResult). Check the Node process and port before retrying."
+}
 Write-Host "Installed $serviceName boot task on http://127.0.0.1:$Port"
 Write-Host "Next: configure Tailscale Serve to forward HTTPS to http://127.0.0.1:$Port"
